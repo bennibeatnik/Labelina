@@ -845,6 +845,23 @@ function makeJob(bitmaps) {
     autoCut: cut !== 'end', chain: cut === 'chain',
   });
 }
+// The printer reports "printing completed" (status type 1) per page, or an error (type 2).
+// Waiting for it tells us the job really printed instead of stalling half-received.
+async function awaitPrinted(pages) {
+  const deadline = Date.now() + 8000 + pages * 4000;
+  let done = 0;
+  while (Date.now() < deadline && done < pages) {
+    let r = null;
+    try { r = await conn.read(32, Math.min(2000, Math.max(200, deadline - Date.now()))); } catch { break; }
+    const st = parseStatus(r);
+    if (!st) continue;
+    if (st.statusType === 0x02 || st.errors.length) { log(`The printer reported: ${st.errors.join(', ') || 'an error'}.`, 'err'); return; }
+    if (st.statusType === 0x01) done++;
+  }
+  if (done >= pages) log(`Printed ${pages === 1 ? 'the label' : pages + ' labels'}.`, 'ok');
+  else if (done > 0) log(`The printer confirmed ${done} of ${pages} labels so far.`);
+  else log('Sent, but the printer hasn\'t confirmed it printed. If it shows "Printing… please wait", switch it off and on, then try again.', 'err');
+}
 async function print(which) {
   const media = currentMedia();
   if (media.kind !== 'tape') { log('Direct printing needs P-touch tape media.', 'err'); return; }
@@ -870,7 +887,8 @@ async function print(which) {
     const job = makeJob(bitmaps);
     log(`Sending ${bitmaps.length} label${bitmaps.length === 1 ? '' : 's'} (${(job.length / 1024).toFixed(1)} KB)…`);
     await conn.write(job);
-    log('Sent to the printer.', 'ok');
+    if (conn.canRead === false) log('Sent to the printer through Windows.', 'ok');
+    else await awaitPrinted(S.outMode === 'strip' && bitmaps.length > 1 ? 1 : bitmaps.length);
   } catch (e) { connErr(e, 'the printer'); }
   finally { busy = false; ['printSel', 'printAll', 'printTest'].forEach(id => { $(id).disabled = false; }); }
 }

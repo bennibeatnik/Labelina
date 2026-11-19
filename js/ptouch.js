@@ -41,14 +41,15 @@ export function buildRasterJob(pages, opts) {
   const margin = Math.max(minMargin, Math.round((opts.marginMm ?? MIN_MARGIN_MM) * lineDpi / 25.4));
   pages.forEach((pg, idx) => {
     const lines = pg.W;
-    const kind = pages.length === 1 ? 0 : idx === 0 ? 0 : idx === pages.length - 1 ? 2 : 1;
+    const kind = idx === 0 ? 0 : 1; // n9: starting page 0, other pages 1 (reference, ESC i z)
     // Print information: validity flags = recover (+ width when the tape has a width code),
     // media width in mm, raster line count. Tubes have no documented width code, so they skip the check.
     const flags = media.widthCode ? 0x84 : 0x80;
     push(0x1b, 0x69, 0x7a, flags, 0x00, media.widthCode || 0, 0x00,
       lines & 0xff, (lines >> 8) & 0xff, (lines >> 16) & 0xff, (lines >> 24) & 0xff, kind, 0x00);
     push(0x1b, 0x69, 0x4d, opts.autoCut ? 0x40 : 0x00); // various mode: auto cut
-    if (opts.autoCut) push(0x1b, 0x69, 0x41, 0x01); // cut every label
+    // No ESC i A ("cut every n labels"): the PT-P710BT family doesn't support it, and a printer
+    // that misreads it waits for data that never comes. Its default is already "cut each label".
     // advanced mode: bit 3 = no chain (feed and cut after the last label), bit 6 = high resolution
     push(0x1b, 0x69, 0x4b, (opts.chain ? 0x00 : 0x08) | (media.hd ? 0x40 : 0x00));
     push(0x1b, 0x69, 0x64, margin & 0xff, (margin >> 8) & 0xff); // feed margin
@@ -120,6 +121,8 @@ export function parseStatus(r) {
     tapeColorCode: r[24], textColorCode: r[25],
     tapeColor: TAPE_COLOR[r[24]] || 'Unknown', textColor: TEXT_COLOR[r[25]] || 'Unknown',
     errors: errs, model: r[4],
+    // 0 reply to status request, 1 printing completed, 2 error, 4 turned off, 6 phase change
+    statusType: r[18], phaseType: r[19],
   };
 }
 

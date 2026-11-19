@@ -50,6 +50,7 @@ try {
   if (R.squareBitmap(hbm).H !== media.pins * 2) throw new Error('squareBitmap height wrong');
   const hjob = P.buildRasterJob([hbm], { media: hdMedia, marginMm: 2, autoCut: true });
   const find = (job, seq) => { for (let i = 0; i < job.length; i++) if (seq.every((v, j) => job[i + j] === v)) return i; return -1; };
+  if (find(hjob, [0x1b, 0x69, 0x41]) >= 0 || find(job, [0x1b, 0x69, 0x41]) >= 0) throw new Error('job contains ESC i A, which the P710BT family does not support');
   if (find(hjob, [0x1b, 0x69, 0x4b, 0x48]) < 0) throw new Error('HD job missing ESC i K 0x48 (high res + no chain)');
   if (find(hjob, [0x1b, 0x69, 0x64, 28, 0]) < 0) throw new Error('HD job margin is not 28 dots (2 mm at 360 dpi)');
   const sjob = P.buildRasterJob([bms[0]], { media, marginMm: 1, autoCut: true });

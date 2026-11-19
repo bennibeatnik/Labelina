@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 
 const SERIAL_BAUD: u32 = 115_200;
 const SERIAL_TIMEOUT: Duration = Duration::from_secs(5);
+/// Per 4 KB chunk; a slow Bluetooth link can take a few seconds while the printer is busy.
+const SERIAL_WRITE_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Serialize, Clone, Debug)]
 pub struct PrinterInfo {
@@ -118,17 +120,34 @@ impl PrinterState {
                 return Err(format!("Can't print to {name} on this system."));
             }
             Some(Link::Serial { path, port }) => {
-                let attempt = |p: &mut Box<dyn serialport::SerialPort>| -> std::io::Result<()> {
+                // Sends in chunks so a slow Bluetooth link can't hit one long timeout, and reports
+                // how far it got. Returns the number of bytes that went out before any error.
+                let attempt = |p: &mut Box<dyn serialport::SerialPort>| -> Result<(), (usize, std::io::Error)> {
                     let _ = p.clear(serialport::ClearBuffer::Input); // drop stale status bytes
-                    p.write_all(data)?;
-                    p.flush()
+                    let _ = p.set_timeout(SERIAL_WRITE_TIMEOUT);
+                    let mut sent = 0usize;
+                    for chunk in data.chunks(4096) {
+                        p.write_all(chunk).map_err(|e| (sent, e))?;
+                        sent += chunk.len();
+                    }
+                    p.flush().map_err(|e| (sent, e))?;
+                    let _ = p.set_timeout(SERIAL_TIMEOUT);
+                    Ok(())
                 };
-                if attempt(port).is_ok() {
-                    return Ok(());
+                match attempt(port) {
+                    Ok(()) => Ok(()),
+                    // Nothing reached the printer: it probably slept or was power-cycled. Reopen and retry.
+                    Err((0, _)) => {
+                        *port = open_serial(path)?;
+                        attempt(port).map_err(|(_, e)| format!("Sending to {path} failed: {e}"))
+                    }
+                    // Part of the job is in the printer; resending would garble it.
+                    Err((sent, e)) => Err(format!(
+                        "Only {} of {} KB reached the printer before the connection failed ({e}). Switch the printer off and on before printing again.",
+                        sent / 1024,
+                        data.len().div_ceil(1024)
+                    )),
                 }
-                // The printer may have slept or been power-cycled: reopen once and retry.
-                *port = open_serial(path)?;
-                attempt(port).map_err(|e| format!("Sending to {path} failed: {e}"))
             }
         }
     }
