@@ -16,13 +16,14 @@ try {
   items.push({ lines: ['bad', '', ''], codeType: 'ean13', code: 'abc' });
   const style = { font: 'Arial', w1: 700, w2: 400, ratio: 0.66, padMm: 1.5, gapMm: 1, edgeMm: 0.2, iconScale: 1, lengthMode: 'auto', lengthMm: 40, unitPitch: 42, unitInset: 6, codePos: 'right', align: 'left', showIcon: true, showIcon2: true, sizeMode: 'auto', border: 'round' };
   let n = 0, errs = new Set();
-  for (const media of M.MEDIA) for (const hd of media.hdCapable ? ['', '1'] : ['']) for (const mode of ['auto', 'units', 'fixed']) for (const pos of ['right', 'below']) {
-    const st = { ...style, lengthMode: mode, codePos: pos, hd };
+  for (const media of M.MEDIA) for (const hd of media.hdCapable ? ['', '1'] : ['']) for (const mode of ['auto', 'units', 'fixed']) for (const pos of ['right', 'below', 'left']) for (const lay of ['row', 'header']) {
+    const st = { ...style, lengthMode: mode, codePos: pos, hd, layout: lay };
     const env = { media: R.resolveMedia(media, st), style: st, feedMm: 2 };
     for (const it of items) {
       const lbl = { lines: [...it.lines, '', ''].slice(0, 3), icon: it.icon || '', icon2: it.icon2 || '', codeType: it.codeType || 'none', code: it.code || '', len: null };
       const g = R.layout(lbl, env); const g2 = R.layout(lbl, env, g.autoF); const sc = R.scene(g2, g.autoF, st);
       if (!(sc.W > 0 && sc.H > 0)) throw new Error('bad size ' + media.id);
+      if (!Number.isInteger(sc.W) || !Number.isInteger(sc.H)) throw new Error(`label size ${sc.W}×${sc.H} is not whole dots on ${media.id}`);
       const cb = g2.codeBox, tb = g2.textBox;
       if (cb && !cb.below && pos === 'right' && g2.lines.length && cb.x < tb.x + tb.w - 1) throw new Error(`code overlaps text on ${media.id} ${mode} "${lbl.lines[0]}"`);
       if (cb && cb.x + (cb.side || cb.w) > sc.W + 1) throw new Error(`code runs past the label end on ${media.id} ${mode}`);
@@ -47,7 +48,12 @@ try {
   const qrLbl = { lines: ['QR', '', ''], icon: '', icon2: '', codeType: 'qr', code: 'SLICC-42', len: null };
   const hdEnv = { media: hdMedia, style: hdStyle, feedMm: 2 };
   const hg = R.layout(qrLbl, hdEnv); const hsc = R.scene(R.layout(qrLbl, hdEnv, hg.autoF), hg.autoF, hdStyle);
-  if (hg.codeBox.mod % 2 || hg.codeBox.y % 2) throw new Error('HD QR modules not on whole printer dots');
+  if (hg.codeBox.y % 2) throw new Error('HD QR does not start on a printer dot');
+  const snapEnv = { media: hdMedia, style: { ...hdStyle, qrSnap: true }, feedMm: 2 };
+  const sg = R.layout(qrLbl, snapEnv);
+  if (sg.codeBox.mod % 2) throw new Error('HD QR modules (snapped) not on whole printer dots');
+  // Every QR module row must start on a printer dot in HD, also when sizes are fractional.
+  for (const it of R.scene(hg, hg.autoF, hdStyle).items) if (it.k === 'rects') for (const [, y, , h] of it.rects) if (y % 2 || h % 2) throw new Error('HD QR row not on whole printer dots');
   const hbm = R.toBitmap(R.renderCanvas(hsc, 2), 2, 0.5, hsc.ySub);
   if (hbm.H !== media.pins) throw new Error('HD bitmap height ' + hbm.H + ' != ' + media.pins + ' pins');
   if (R.squareBitmap(hbm).H !== media.pins * 2) throw new Error('squareBitmap height wrong');
@@ -56,6 +62,17 @@ try {
   if (find(hjob, [0x1b, 0x69, 0x41]) >= 0 || find(job, [0x1b, 0x69, 0x41]) >= 0) throw new Error('job contains ESC i A, which the P710BT family does not support');
   if (find(hjob, [0x1b, 0x69, 0x4b, 0x48]) < 0) throw new Error('HD job missing ESC i K 0x48 (high res + no chain)');
   if (find(hjob, [0x1b, 0x69, 0x64, 28, 0]) < 0) throw new Error('HD job margin is not 28 dots (2 mm at 360 dpi)');
+  // Same command set as Brother's own driver (captured from it): see ptouch.js.
+  if (find(hjob, [0x1b, 0x69, 0x7a, 0x86, 0x09, 12]) < 0) throw new Error('HD job print info is not flags 0x86 / type 0x09 / 12 mm like Brother\'s driver');
+  for (const seq of [[0x1b, 0x69, 0x21, 0x01], [0x1b, 0x69, 0x70, 0x00], [0x1b, 0x69, 0x4c, 0x00, 0x01, 0x01], [0x1b, 0x69, 0x43, 0x01, 0xff, 0xff, 0xff], [0x4d, 0x00]])
+    if (find(hjob, seq) < 0) throw new Error('job is missing ' + seq.map(x => x.toString(16)).join(' '));
+  // Orientation like Brother's driver: the label's top row prints on the first print-area pin.
+  const ob = { bits: new Uint8Array(media.pins * 4), W: 4, H: media.pins }; ob.bits.fill(1, 0, 4); // top row only
+  const ojob = P.buildRasterJob([ob], { media, marginMm: 2, autoCut: true });
+  const g0 = find(ojob, [0x47, 16, 0]);
+  const firstLine = ojob.slice(g0 + 3, g0 + 19);
+  const pinOn = p => (firstLine[p >> 3] >> (7 - (p & 7))) & 1;
+  if (!pinOn(media.pinOffset) || pinOn(media.pinOffset + media.pins - 1)) throw new Error('top row of the label is not on the first print-area pin');
   const sjob = P.buildRasterJob([bms[0]], { media, marginMm: 1, autoCut: true });
   if (find(sjob, [0x1b, 0x69, 0x64, 14, 0]) < 0) throw new Error('margin below 2 mm was not raised to 14 dots');
   const tube = M.MEDIA_MAP['hse-11.7'];
@@ -74,6 +91,61 @@ try {
     out.push(`${pre.name} ${hd ? 'HD' : 'SD'}: ${total.toFixed(2)} mm`);
   }
   const png = await X.canvasToPNG(X.bitmapCanvas(bms[0]), 180); const b = new Uint8Array(await png.arrayBuffer());
+  // --- Text fits to the ink, per-line sizes, line spacing, header layout, smooth QR
+  {
+    const base = { font: 'Arial', padMm: 0, gapMm: 0.5, edgeMm: 0, iconGapMm: 0.3, lineGapMm: 0.3, iconScale: 1, iconScale2: 0.65, lineCount: 3, lengthMode: 'fixed', lengthMm: 63, codePos: 'right', align: 'left', showIcon: true, showIcon2: true, sizeMode: 'auto', border: 'none', layout: 'row', lineRel: [1, 0.6, 0.6, 0.6, 0.6], linePt: [14, 9, 9, 9, 9], lineW: [700, 400, 400, 400, 400] };
+    const m12 = M.MEDIA_MAP['tze-12'];
+    const lblT = { lines: ['M3×8', 'Socket head', 'ISO 4762'], icon: 'shcs', icon2: 'd-hex', codeType: 'none', code: '', len: null };
+    const mk = (st, l = lblT, med = m12) => { const env = { media: R.resolveMedia(med, st), style: st, feedMm: 2 }; const g = R.layout(l, env); const f = R.chooseF(g, st); const g2 = R.layout(l, env, f); return { g: g2, sc: R.scene(g2, f, st) }; };
+    const inkRows = (sc, x0, x1) => { const bm = R.toBitmap(R.renderCanvas(sc, 3), 3, 0.5, sc.ySub); let top = -1, bot = -1; for (let y = 0; y < bm.H; y++) for (let x = Math.max(0, Math.floor(x0)); x < Math.min(bm.W, x1); x++) if (bm.bits[y * bm.W + x]) { if (top < 0) top = y; bot = y; break; } return { top, bot, H: bm.H }; };
+    // 1. Height-bound text reaches the top and bottom of the print area (within 1 dot).
+    { const { g, sc } = mk(base); const r = inkRows(sc, g.textBox.x, g.textBox.x + g.textBox.w);
+      if (r.top > 1 || r.bot < r.H - 2) throw new Error(`text ink spans rows ${r.top}..${r.bot} of ${r.H}: not reaching the edges`);
+      out.push(`tight text: ink rows ${r.top}..${r.bot} of ${r.H}`); }
+    // 2. Fixed sizes: changing line 2's size changes only line 2.
+    { const st = { ...base, sizeMode: 'fixed', linePt: [9, 5, 5, 5, 5], lengthMm: 100 };
+      const a = mk(st).sc.items.filter(i => i.k === 'text').map(i => i.size.toFixed(2));
+      const b = mk({ ...st, linePt: [9, 6, 5, 5, 5] }).sc.items.filter(i => i.k === 'text').map(i => i.size.toFixed(2));
+      if (a[0] !== b[0] || a[2] !== b[2] || a[1] === b[1]) throw new Error(`fixed per-line sizes not independent: ${a} -> ${b}`);
+      out.push(`fixed per-line sizes: ${a.join('/')} -> ${b.join('/')}`); }
+    // 3. Auto: lowering line 3's percentage shrinks line 3 relative to line 2.
+    { const a = mk(base).sc.items.filter(i => i.k === 'text').map(i => i.size);
+      const b = mk({ ...base, lineRel: [1, 0.6, 0.3, 0.6, 0.6] }).sc.items.filter(i => i.k === 'text').map(i => i.size);
+      if (!(b[2] / b[1] < a[2] / a[1] - 0.2)) throw new Error('auto per-line % has no effect on line 3');
+      out.push(`auto line 3 at 60% vs 30%: ${(a[2] / a[1]).toFixed(2)} -> ${(b[2] / b[1]).toFixed(2)} of line 2`); }
+    // 4. Line spacing 0 packs lines tighter (bigger text) than 1 mm.
+    { const s0 = mk({ ...base, lineGapMm: 0 }).sc.items.find(i => i.k === 'text').size, s1 = mk({ ...base, lineGapMm: 1 }).sc.items.find(i => i.k === 'text').size;
+      if (!(s0 > s1)) throw new Error('line spacing has no effect');
+      out.push(`line spacing 0 vs 1 mm: line 1 ${s0.toFixed(1)} vs ${s1.toFixed(1)} dots`); }
+    // 5. Header layout: icon beside line 1 only; lines 2+ start at the text box's left edge.
+    { const { g, sc } = mk({ ...base, layout: 'header' });
+      const texts = sc.items.filter(i => i.k === 'text'), icons = sc.items.filter(i => i.k === 'icon');
+      if (icons.length !== 2) throw new Error('header layout lost an icon');
+      if (!(texts[0].x > g.textBox.x + 1)) throw new Error('header layout: line 1 not after the icons');
+      if (Math.abs(texts[1].x - g.textBox.x) > 0.5) throw new Error('header layout: line 2 not under the icon');
+      // The icons' printed rows must lie within line 1's ink rows.
+      const l1Top = texts[0].y - g.L[0].a * texts[0].size, l1Bottom = texts[0].y + g.L[0].d * texts[0].size;
+      const I = await import('../js/icons.js');
+      for (const ic of icons) {
+        const b = I.iconInkBounds(ic.id), top = ic.y + b.y0 * ic.s, bot = ic.y + b.y1 * ic.s;
+        if (top < l1Top - 1 || bot > l1Bottom + 1) throw new Error(`header layout: icon ${ic.id} ink ${top.toFixed(0)}..${bot.toFixed(0)} outside line 1 (${l1Top.toFixed(0)}..${l1Bottom.toFixed(0)})`);
+        if (ic.x + b.x1 * ic.s > texts[0].x + 0.5) throw new Error('header layout: icon overlaps line 1');
+      }
+      const r = inkRows(sc, 0, sc.W);
+      if (r.top > 1 || r.bot < r.H - 2) throw new Error(`header text block spans ${r.top}..${r.bot} of ${r.H}`);
+      out.push(`header layout: line 1 x=${texts[0].x.toFixed(0)}, line 2 x=${texts[1].x.toFixed(0)}, ink rows ${r.top}..${r.bot}`); }
+    // 6. QR size follows the slider smoothly and never disappears on 12 mm tape.
+    { const sides = [];
+      for (let s = 0.3; s <= 1.0001; s += 0.05) {
+        const env = { media: m12, style: { ...base, qrQuiet: 1 }, feedMm: 2, codeScale: s };
+        const g = R.layout({ ...lblT, codeType: 'qr', code: 'M3x8-SHCS' }, env);
+        if (!g.codeBox) throw new Error('QR disappeared at size ' + s.toFixed(2));
+        sides.push(g.codeBox.side);
+      }
+      for (let i = 1; i < sides.length; i++) if (sides[i] < sides[i - 1]) throw new Error('QR size went down as the slider went up: ' + sides.join(','));
+      if (new Set(sides).size < sides.length * 0.7) throw new Error('QR size moves in big steps: ' + sides.join(','));
+      out.push('QR side over slider 30..100%: ' + sides.join(',')); }
+  }
   out.push('png pHYs at 37: ' + String.fromCharCode(...b.slice(37, 41)) + ' size ' + b.length);
   const svg = R.renderSVG(scs[0], () => null, ''); out.push('svg length ' + svg.length + ' starts ' + svg.slice(0, 38).replace(/\n/g, ' '));
   const its = bms.map(bm => ({ canvas: X.bitmapCanvas(bm), wMm: bm.W / 180 * 25.4, hMm: bm.H / 180 * 25.4, qty: 2 }));

@@ -6,29 +6,19 @@
 const SPP_UUID = '00001101-0000-1000-8000-00805f9b34fb';
 const BROTHER_VID = 0x04f9;
 
-function packbits(src) {
-  const out = [];
-  let i = 0;
-  while (i < src.length) {
-    let j = i;
-    while (j + 1 < src.length && src[j + 1] === src[i] && j - i < 127) j++;
-    const run = j - i + 1;
-    if (run >= 2) { out.push((257 - run) & 0xff, src[i]); i = j + 1; continue; }
-    const lit = [];
-    let q = i;
-    while (q < src.length && lit.length < 128 && !(q + 1 < src.length && src[q] === src[q + 1])) lit.push(src[q++]);
-    out.push(lit.length - 1, ...lit);
-    i = q;
-  }
-  return out;
-}
-
 // Brother's minimum feed margin is 2 mm: 14 dots at 180 dpi, 28 at 360 dpi (reference 2.3.3).
 export const MIN_MARGIN_MM = 2;
 
 // pages: array of {bits, W, H}. Each W column becomes one raster line. H must equal media.pins.
 // opts: { media, autoCut, chain, marginMm, flip, mirror }. media.hd = high resolution:
 // raster lines (and the margin) are counted at 360 dpi along the tape.
+//
+// The command sequence mirrors what Brother's own Windows driver sends to the PT-D610BT
+// (captured with "print to file" through the driver; see docs/project-notes.md):
+//   ESC i a 01, ESC i ! 01 (no automatic status messages), then per page ESC i z, ESC i M, ESC i K,
+//   ESC i p 00, ESC i L 00 01 01, ESC i C 01 ff ff ff, ESC i d, M 00 and uncompressed raster lines.
+// HD is sent the driver's way too: flags 0x86 with media type 0x09 plus ESC i K bit 6.
+// Orientation also follows the driver: the top row of the label goes to the first print-area pin.
 export function buildRasterJob(pages, opts) {
   const { media } = opts;
   const lineDpi = media.hd ? 360 : 180;
@@ -37,43 +27,45 @@ export function buildRasterJob(pages, opts) {
   for (let i = 0; i < 100; i++) out.push(0); // invalidate
   push(0x1b, 0x40); // initialise
   push(0x1b, 0x69, 0x61, 0x01); // raster mode
+  push(0x1b, 0x69, 0x21, 0x01); // no automatic status notifications (as Brother's driver does)
   const minMargin = Math.round(MIN_MARGIN_MM * lineDpi / 25.4);
   const margin = Math.max(minMargin, Math.round((opts.marginMm ?? MIN_MARGIN_MM) * lineDpi / 25.4));
   pages.forEach((pg, idx) => {
     const lines = pg.W;
     const kind = idx === 0 ? 0 : 1; // n9: starting page 0, other pages 1 (reference, ESC i z)
-    // Print information: validity flags = recover (+ width when the tape has a width code),
-    // media width in mm, raster line count. Tubes have no documented width code, so they skip the check.
-    const flags = media.widthCode ? 0x84 : 0x80;
-    push(0x1b, 0x69, 0x7a, flags, 0x00, media.widthCode || 0, 0x00,
+    // Print information. Tubes have no documented width code, so they skip the width check.
+    const flags = !media.widthCode ? 0x80 : media.hd ? 0x86 : 0x84;
+    const type = media.hd ? 0x09 : 0x00;
+    push(0x1b, 0x69, 0x7a, flags, type, media.widthCode || 0, 0x00,
       lines & 0xff, (lines >> 8) & 0xff, (lines >> 16) & 0xff, (lines >> 24) & 0xff, kind, 0x00);
     push(0x1b, 0x69, 0x4d, opts.autoCut ? 0x40 : 0x00); // various mode: auto cut
-    // No ESC i A ("cut every n labels"): the PT-P710BT family doesn't support it, and a printer
-    // that misreads it waits for data that never comes. Its default is already "cut each label".
     // advanced mode: bit 3 = no chain (feed and cut after the last label), bit 6 = high resolution
     push(0x1b, 0x69, 0x4b, (opts.chain ? 0x00 : 0x08) | (media.hd ? 0x40 : 0x00));
+    // Undocumented settings Brother's driver always sends for this printer, copied verbatim.
+    push(0x1b, 0x69, 0x70, 0x00);
+    push(0x1b, 0x69, 0x4c, 0x00, 0x01, 0x01);
+    push(0x1b, 0x69, 0x43, 0x01, 0xff, 0xff, 0xff);
     push(0x1b, 0x69, 0x64, margin & 0xff, (margin >> 8) & 0xff); // feed margin
-    push(0x4d, 0x02); // TIFF (PackBits) compression
+    push(0x4d, 0x00); // no compression: over USB the printer starts while data still arrives
     const line = new Uint8Array(16);
     for (let c = 0; c < lines; c++) {
       const x = opts.mirror ? lines - 1 - c : c;
       line.fill(0);
-      let any = false;
       for (let y = 0; y < pg.H; y++) {
         if (!pg.bits[y * pg.W + x]) continue;
-        const pin = media.pinOffset + (opts.flip ? y : pg.H - 1 - y);
+        const pin = media.pinOffset + (opts.flip ? pg.H - 1 - y : y);
         if (pin < 0 || pin > 127) continue;
         line[pin >> 3] |= 0x80 >> (pin & 7);
-        any = true;
       }
-      if (!any) { push(0x5a); continue; }
-      const packed = packbits(Array.from(line));
-      push(0x47, packed.length & 0xff, (packed.length >> 8) & 0xff, ...packed);
+      push(0x47, 16, 0x00, ...line);
     }
     push(idx === pages.length - 1 ? 0x1a : 0x0c);
   });
   return new Uint8Array(out);
 }
+
+// Status request without re-initialising: safe to send right after a job.
+export const STATUS_ONLY = new Uint8Array([0x1b, 0x69, 0x53]);
 
 // Join labels into one long page with dashed cut marks between them.
 export function joinStrip(bitmaps) {

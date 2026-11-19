@@ -94,13 +94,20 @@
 
       <fieldset class="group">
         <legend>Layout</legend>
+        <label class="field wide"><span>Arrangement</span>
+          <select id="layout" data-key="layout">
+            <option value="row">Icons beside the text (full height)</option>
+            <option value="header">Icon on line 1, other lines underneath</option>
+          </select>
+        </label>
         <div class="field-row">
           <label class="field"><span>Text align</span><select id="align" data-key="align"><option value="left">Left</option><option value="center">Centre</option></select></label>
           <label class="field"><span>Code position</span><select id="codePos" data-key="codePos"><option value="right">Right</option><option value="left">Left</option><option value="below">Below (barcodes, tall labels)</option></select></label>
         </div>
         <label class="field wide"><span>Icon size <output id="iconScaleOut"></output></span><input type="range" id="iconScale" data-key="iconScale" min="0.3" max="1" step="0.05"></label>
         <label class="field wide"><span>Second icon size <output id="iconScale2Out"></output></span><input type="range" id="iconScale2" data-key="iconScale2" min="0.3" max="1" step="0.05"></label>
-        <label class="field wide"><span>Code size <output id="codeScaleOut"></output> <small id="codeScaleFor"></small></span><input type="range" id="codeScale" min="0.3" max="1" step="0.05"></label>
+        <label class="field wide"><span>Code size <output id="codeScaleOut"></output> <small id="codeScaleFor"></small></span><input type="range" id="codeScale" min="0.1" max="1" step="0.01"></label>
+        <label class="check"><input type="checkbox" id="qrSnap" data-key="qrSnap"> Keep QR modules the same width (size moves in steps)</label>
         <div class="field-row">
           <label class="field"><span>Padding mm</span><input type="number" id="padMm" data-key="padMm" min="0" max="10" step="0.25" title="Space between the content and the ends of the label"></label>
           <label class="field"><span>Gap mm</span><input type="number" id="gapMm" data-key="gapMm" min="0" max="10" step="0.25" title="Space between icons, text and code"></label>
@@ -126,20 +133,16 @@
         <label class="field wide"><span>Typeface</span><select id="font" data-key="font"></select></label>
         <label class="field wide"><span>Text lines</span><select id="lineCount" data-key="lineCount" title="More lines suit taller tape (18 and 24 mm)"><option value="3">3 lines</option><option value="4">4 lines</option><option value="5">5 lines (tall tape)</option></select></label>
         <div class="field-row">
-          <label class="field"><span>Line 1 weight</span><select id="w1" data-key="w1"><option value="400">Regular</option><option value="500">Medium</option><option value="600">Semibold</option><option value="700">Bold</option></select></label>
-          <label class="field"><span>Other lines</span><select id="w2" data-key="w2"><option value="400">Regular</option><option value="500">Medium</option><option value="600">Semibold</option><option value="700">Bold</option></select></label>
+          <label class="field"><span>Text size</span><select id="sizeMode" data-key="sizeMode"><option value="auto">Fit to the label</option><option value="fixed">Fixed point sizes</option></select></label>
+          <label class="field"><span>Line spacing mm</span><input type="number" id="lineGapMm" data-key="lineGapMm" min="0" max="5" step="0.1" title="Space between lines, measured from the ink of one line to the next. 0 = touching."></label>
         </div>
-        <div class="field-row">
-          <label class="field wide"><span>Text size</span><select id="sizeMode" data-key="sizeMode"><option value="auto">Fit automatically</option><option value="fixed">Fixed point sizes</option></select></label>
-        </div>
-        <div class="field-row" id="fPt">
-          <label class="field"><span>Line 1 pt</span><input type="number" id="pt" data-key="pt" min="3" max="96" step="0.5"></label>
-          <label class="field"><span>Other lines pt</span><input type="number" id="pt2" data-key="pt2" min="3" max="96" step="0.5"></label>
-        </div>
-        <p class="hint" id="ptHint" hidden>Text only shrinks below these sizes when a line doesn't fit.</p>
-        <label class="field wide" id="fRatio"><span>Other lines size <output id="ratioOut"></output> of line 1</span><input type="range" id="ratio" data-key="ratio" min="0.3" max="1" step="0.02"></label>
+        <table class="line-specs" aria-label="Per-line text settings">
+          <thead><tr><th>Line</th><th id="lineSizeHead">Size</th><th>Weight</th></tr></thead>
+          <tbody id="lineSpecs"></tbody>
+        </table>
+        <p class="hint" id="sizeHint"></p>
         <div class="checks">
-          <label class="check"><input type="checkbox" id="match" data-key="match"> Same text size on every label</label>
+          <label class="check"><input type="checkbox" id="match" data-key="match"> Same text size on every label (uses the smallest)</label>
           <label class="check"><input type="checkbox" id="upper" data-key="upper"> Uppercase line 1</label>
         </div>
       </fieldset>

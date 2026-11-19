@@ -11,7 +11,9 @@ It comes two ways from the same code:
 
 - **Parts library** with generators for screws and bolts (15 head types, 7 drives, metric and UNC/UNF, coarse/fine pitch, standard lengths per size, key/wrench sizes, ISO/DIN numbers), nuts, washers (with ID × OD × thickness), threaded inserts, standoffs, pins, clips and rivets. Electronics: resistors (E-series ranges, colour bands, SMD codes), capacitors (marking codes), inductors, diodes, transistors, ICs, regulators, LEDs, connectors, pin headers, wire, heat shrink, crystals, fuses, switches and batteries. Pick several sizes and lengths to generate a whole set of labels at once.
 - **About 90 built-in icons**, including head profiles and drive symbols, plus uploaded images. Icons take only their drawn width, so they sit tight against each other and the text.
-- **Layout controls**: up to 5 text lines (for 18 and 24 mm tape), icon and second-icon size, gap between groups and between the icons, padding, tape edge, code on the left, right or below, QR border (0, 1, 2 or 4 modules) and **code size per tape width**. On fixed-length labels the icons and code shrink to leave room for the text instead of overlapping it.
+- **Layouts**: icons beside the text (full height), or icons on line 1 with the other lines underneath.
+- **Text**: up to 5 lines, each with its own size (% of line 1, or a fixed point size) and weight, and adjustable line spacing down to 0. Text is measured by its actual ink, so it fills the height to the edge with no hidden padding.
+- **Layout controls**: icon and second-icon size, gap between groups and between the icons, padding, tape edge, code on the left, right or below, QR border (0, 1, 2 or 4 modules) and **code size per tape width**, which resizes smoothly. On fixed-length labels the icons and code shrink to leave room for the text instead of overlapping it.
 - **Media**: Brother P-touch TZe tape (3.5–24 mm) in standard 180 × 180 dpi or **HD 180 × 360 dpi**, Brother HSe heat-shrink tube (2:1 and 3:1, nine sizes), Brother QL rolls, Dymo LabelWriter, 203 dpi thermal labels, label sheets (A4/Letter templates) and custom sizes. Tape length can fit the content, be fixed, follow grid units (42 mm Gridfinity by default), or use a **length preset**: SLICC 33 mm and 63 mm (cut at exactly that length with the smallest margins the printer allows) plus common lengths.
 - **Codes**: QR, Code 128, Code 39, EAN-13 and UPC-A. Modules are snapped to whole printer dots.
 - **Exports**: PDF sheet, PDF per label, PNG (printer-exact 1-bit with correct DPI metadata), PNG set (.zip), SVG, SVG set (.zip), ZPL, P-touch raster job (.bin) and CSV. Projects save and load as JSON and auto-save in the browser.
@@ -41,7 +43,7 @@ Copy the whole folder to any static host (nginx, Apache, Caddy, GitHub Pages, Ne
 
 `desktop/` wraps the studio in [Tauri](https://tauri.app). It shows the same pages in WebView2, which is built into Windows 10 and 11, and adds a small Rust backend (`desktop/src-tauri/src/printer.rs`) for printing:
 
-- **USB**: jobs go through the Windows print queue as raw data, so Brother's own driver passes them to the printer. No Zadig/WinUSB swap, and P-touch Editor keeps working. The print queue can't report back, so the loaded tape can't be read over USB.
+- **USB**: Labelina opens the printer's USB printer interface directly (Windows' own usbprint driver), so it can read the tape and confirm each print. No Zadig/WinUSB swap, and Brother's driver and P-touch Editor keep working. The job uses the same commands Brother's own driver sends (captured from it), including HD.
 - **Bluetooth**: paired printers are listed by name (for example *PT-D610BT1200 · Bluetooth · COM5*). The port stays open between prints and is reopened automatically if the printer slept or was switched off. The tape width and colour are read on connect.
 - The last printer is remembered and reconnected when the app starts. Exports open a normal Save dialog.
 

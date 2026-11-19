@@ -1,8 +1,8 @@
 import { ICONS, ICON_MAP, ICON_CATS, paintIcon } from './icons.js';
 import { MEDIA, MEDIA_MAP, TAPE_COLORS, LENGTH_PRESETS, LENGTH_PRESET_MAP, PTOUCH_MIN_MARGIN_MM } from './media.js';
 import { CODE_TYPES } from './codes.js';
-import { FONTS, layout, scene, renderCanvas, toBitmap, squareBitmap, renderSVG, resolveMedia, dpiLabel, clearMetrics, labelLengthMm } from './render.js';
-import { buildRasterJob, joinStrip, STATUS_REQUEST, parseStatus, connectUSB, connectSerial, IS_NATIVE, listNativePrinters, connectNative } from './ptouch.js';
+import { FONTS, layout, scene, renderCanvas, toBitmap, squareBitmap, renderSVG, resolveMedia, dpiLabel, clearMetrics, labelLengthMm, chooseF } from './render.js';
+import { buildRasterJob, joinStrip, STATUS_REQUEST, STATUS_ONLY, parseStatus, connectUSB, connectSerial, IS_NATIVE, listNativePrinters, connectNative } from './ptouch.js';
 import { saveBlob, safeName, canvasToPNG, bitmapCanvas, bitmapToZPL, pdfPerLabel, pdfSheet, zipFiles, labelsToCSV, parseTable } from './exporters.js';
 import { CATEGORIES, COMMON_FIELDS, defaultsFor } from './library.js';
 
@@ -17,7 +17,10 @@ const DEFAULTS = {
   align: 'left', codePos: 'right', iconScale: 1, iconScale2: 0.65, iconGapMm: 0.5, padMm: 1.5, gapMm: 1, edgeMm: 0, border: 'none', invert: false,
   codeScale: 1, codeScales: {}, qrQuiet: 1, lineCount: 3,
   showIcon: true, showIcon2: true, showCode: true,
-  font: 'Roboto Condensed', w1: '700', w2: '400', sizeMode: 'auto', pt: 14, pt2: 9, ratio: 0.66, match: true, upper: false,
+  font: 'Roboto Condensed', sizeMode: 'auto', match: false, upper: false,
+  // Per-line text: size relative to line 1 (auto), point size (fixed), weight. Line spacing in mm.
+  layout: 'row', lineRel: [1, 0.66, 0.66, 0.66, 0.66], linePt: [14, 9, 9, 9, 9], lineW: ['700', '400', '400', '400', '400'], lineGapMm: 0.3,
+  qrSnap: false, orientV: 2,
   zoom: 'fit', outMode: 'pages', cutMode: 'each', marginMm: 2, flip: false, mirror: false, sheetPage: 'a4', skipSlots: 0,
 };
 
@@ -71,7 +74,16 @@ function save() {
 function projectData() { return { app: 'labelina', version: 1, style: S, labels, customIcons }; }
 function applyProject(d, quiet) {
   if (!d || typeof d !== 'object') throw new Error('Not a Labelina project file');
-  if (d.style) S = { ...DEFAULTS, ...d.style };
+  if (d.style) {
+    S = { ...DEFAULTS, ...d.style };
+    const o = d.style;
+    // Older projects: one weight and size for line 1, one for the rest.
+    if (!o.lineRel) S.lineRel = [1, ...Array(4).fill(+o.ratio || 0.66)];
+    if (!o.linePt) S.linePt = [+o.pt || 14, ...Array(4).fill(+o.pt2 || 9)];
+    if (!o.lineW) S.lineW = [String(o.w1 || '700'), ...Array(4).fill(String(o.w2 || '400'))];
+    // Print orientation now follows Brother's driver; Flip/Mirror set to compensate before are reset.
+    if (!o.orientV) { S.flip = false; S.mirror = false; S.orientV = 2; }
+  }
   if (!MEDIA_MAP[S.media]) S.media = DEFAULTS.media;
   if (Array.isArray(d.labels)) labels = d.labels.map(l => ({ ...mkLabel(l), id: l.id || newId() }));
   if (Array.isArray(d.customIcons)) { customIcons = d.customIcons.filter(c => c && c.id && c.src); customIcons.forEach(loadCustomImage); }
@@ -109,10 +121,8 @@ let renders = []; // per label: {sc, key}
 
 function computeRenders() {
   const E = env();
-  const dpi = E.media.dpi;
   const geos = labels.map(l => layout(l, E));
-  const fixedF = S.sizeMode === 'fixed' ? (+S.pt || 12) * dpi / 72 : null;
-  let fs = geos.map(g => (g.lines.length ? (fixedF ? Math.min(fixedF, g.autoF) : g.autoF) : 0));
+  let fs = geos.map(g => (g.lines.length ? chooseF(g, S) : 0));
   if (S.match) {
     const valid = fs.filter(f => f > 0);
     if (valid.length) { const mn = Math.min(...valid); fs = fs.map(f => (f > 0 ? mn : f)); }
@@ -619,15 +629,13 @@ function updateDesignVisibility() {
   $('unitHint').textContent = `1 unit = ${(p - ins).toFixed(1)} mm · 2 = ${(2 * p - ins).toFixed(1)} mm · 3 = ${(3 * p - ins).toFixed(1)} mm. Set each label's units in the list.`;
   $('fTapeColor').hidden = m.kind !== 'tape';
   $('fEdge').hidden = m.kind !== 'tape';
-  $('fPt').hidden = $('ptHint').hidden = S.sizeMode !== 'fixed';
-  $('fRatio').hidden = S.sizeMode === 'fixed';
+  renderLineSpecs();
   $('iconScaleOut').textContent = Math.round(S.iconScale * 100) + '%';
   $('iconScale2Out').textContent = Math.round((S.iconScale2 ?? 0.66) * 100) + '%';
   const cs = codeScaleFor(S.media);
   $('codeScale').value = cs;
   $('codeScaleOut').textContent = Math.round(cs * 100) + '% of the height';
   $('codeScaleFor').textContent = `(for ${m.custom ? 'custom size' : m.name})`;
-  $('ratioOut').textContent = Math.round(S.ratio * 100) + '%';
   const tape = m.kind === 'tape';
   $('printBody').hidden = !tape;
   $('connUsb').hidden = $('connBt').hidden = IS_NATIVE || !tape || !!conn;
@@ -648,6 +656,53 @@ function updateDesignVisibility() {
     $('presetHint').textContent = `Each label is cut at ${pre.mm} mm.${tight} The first label of a print run can come out longer, because the printer feeds about 24 mm of tape before its first cut.`;
   }
 }
+// Per-line size and weight table (Design → Text). Auto mode: % of line 1. Fixed mode: points.
+let lineSpecSig = '';
+const WEIGHTS = [['400', 'Regular'], ['500', 'Medium'], ['600', 'Semibold'], ['700', 'Bold']];
+function renderLineSpecs() {
+  const n = +S.lineCount || 3, fixed = S.sizeMode === 'fixed';
+  $('lineSizeHead').textContent = fixed ? 'Size (pt)' : 'Size (% of line 1)';
+  $('sizeHint').textContent = fixed
+    ? 'Each line prints at its point size, unless it doesn\'t fit; then the text shrinks and the preview says so.'
+    : 'Line 1 grows until the text fills the height or a line reaches the end of the label. Other lines follow at their percentage.';
+  const sig = `${n}|${fixed}`;
+  const tb = $('lineSpecs');
+  if (sig === lineSpecSig && tb.children.length) {
+    // Same shape: just refresh the values (e.g. after Open or New).
+    [...tb.querySelectorAll('input')].forEach(inp => { const i = +inp.dataset.i; inp.value = fixed ? S.linePt[i] : Math.round(S.lineRel[i] * 100); });
+    [...tb.querySelectorAll('select')].forEach(sel => { sel.value = S.lineW[+sel.dataset.i]; });
+    return;
+  }
+  lineSpecSig = sig;
+  tb.innerHTML = '';
+  for (let i = 0; i < n; i++) {
+    const tr = document.createElement('tr');
+    const c0 = document.createElement('td'); c0.textContent = String(i + 1);
+    const c1 = document.createElement('td');
+    if (!fixed && i === 0) { c1.textContent = '100% (sets the scale)'; }
+    else {
+      const inp = document.createElement('input');
+      inp.type = 'number'; inp.dataset.i = i; inp.setAttribute('aria-label', `Line ${i + 1} size`);
+      if (fixed) { inp.min = '3'; inp.max = '96'; inp.step = '0.5'; inp.value = S.linePt[i]; }
+      else { inp.min = '10'; inp.max = '200'; inp.step = '1'; inp.value = Math.round(S.lineRel[i] * 100); }
+      inp.addEventListener('input', () => {
+        const v = +inp.value; if (!(v > 0)) return;
+        if (fixed) { S.linePt = S.linePt.map((x, j) => (j === i ? v : x)); }
+        else { S.lineRel = S.lineRel.map((x, j) => (j === i ? v / 100 : x)); }
+        rerender(true);
+      });
+      c1.appendChild(inp);
+    }
+    const c2 = document.createElement('td');
+    const sel = document.createElement('select'); sel.dataset.i = i; sel.setAttribute('aria-label', `Line ${i + 1} weight`);
+    WEIGHTS.forEach(([v, t]) => sel.add(new Option(t, v)));
+    sel.value = S.lineW[i];
+    sel.addEventListener('change', () => { S.lineW = S.lineW.map((x, j) => (j === i ? sel.value : x)); ensureFont(); rerender(true); });
+    c2.appendChild(sel);
+    tr.append(c0, c1, c2);
+    tb.appendChild(tr);
+  }
+}
 // Applies a length preset. Tight presets (SLICC) also pick the smallest margins.
 function applyLengthPreset(id) {
   const p = LENGTH_PRESET_MAP[id];
@@ -663,7 +718,7 @@ async function ensureFont() {
   const f = FONTS.find(x => x.family === S.font);
   if (!f || f.system || !document.fonts) return;
   try {
-    await Promise.all([S.w1, S.w2].map(w => document.fonts.load(`${w} 40px "${S.font}"`)));
+    await Promise.all([...new Set(S.lineW)].map(w => document.fonts.load(`${w} 40px "${S.font}"`)));
   } catch { /* fall back silently */ }
   clearMetrics(); fontVersion++; rerender(true);
 }
@@ -677,7 +732,7 @@ function onControl(el) {
   if (key === 'lengthPreset') applyLengthPreset(v);
   else if ((key === 'lengthMode' || key === 'lengthMm') && S.lengthPreset) { S.lengthPreset = ''; $('lengthPreset').value = ''; }
   updateDesignVisibility();
-  if (key === 'font' || key === 'w1' || key === 'w2') ensureFont();
+  if (key === 'font') ensureFont();
   if (key === 'media' || key === 'lengthMode' || key === 'lengthPreset' || key === 'lineCount') buildTable();
   rerender(true);
 }
@@ -859,22 +914,26 @@ function makeJob(bitmaps) {
     autoCut: cut !== 'end', chain: cut === 'chain',
   });
 }
-// The printer reports "printing completed" (status type 1) per page, or an error (type 2).
-// Waiting for it tells us the job really printed instead of stalling half-received.
+// Jobs switch automatic status messages off (as Brother's driver does), so we ask: send a bare
+// status request every ~0.4 s. Phase 1 = printing, phase 0 = idle/receiving. "Printed" needs
+// printing followed by idle; an error bit ends it at once.
 async function awaitPrinted(pages) {
-  const deadline = Date.now() + 8000 + pages * 4000;
-  let done = 0;
-  while (Date.now() < deadline && done < pages) {
-    let r = null;
-    try { r = await conn.read(32, Math.min(2000, Math.max(200, deadline - Date.now()))); } catch { break; }
-    const st = parseStatus(r);
-    if (!st) continue;
-    if (st.statusType === 0x02 || st.errors.length) { log(`The printer reported: ${st.errors.join(', ') || 'an error'}.`, 'err'); return; }
-    if (st.statusType === 0x01) done++;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const deadline = Date.now() + 10000 + pages * 6000;
+  let sawPrinting = false, idleCount = 0;
+  while (Date.now() < deadline) {
+    let st = null;
+    try { await conn.write(STATUS_ONLY); st = parseStatus(await conn.read(32, 1200)); } catch { break; }
+    if (st) {
+      if (st.errors.length || st.statusType === 0x02) { log(`The printer reported: ${st.errors.join(', ') || 'an error'}.`, 'err'); return; }
+      if (st.phaseType === 1) { sawPrinting = true; idleCount = 0; }
+      else if (sawPrinting) { log(`Printed ${pages === 1 ? 'the label' : pages + ' labels'}.`, 'ok'); return; }
+      else if (++idleCount >= 8) break; // idle for ~3 s and never started
+    }
+    await sleep(400);
   }
-  if (done >= pages) log(`Printed ${pages === 1 ? 'the label' : pages + ' labels'}.`, 'ok');
-  else if (done > 0) log(`The printer confirmed ${done} of ${pages} labels so far.`);
-  else log('Sent, but the printer hasn\'t confirmed it printed. If it shows "Printing… please wait", switch it off and on, then try again.', 'err');
+  if (sawPrinting) log('The printer started but hasn\'t finished yet. Check it for a message.');
+  else log('The printer received the job but didn\'t start printing. Check its screen; if it says "Printing… please wait", note what it shows and tell us.', 'err');
 }
 async function print(which) {
   const media = currentMedia();
@@ -886,8 +945,9 @@ async function print(which) {
     const test = mkLabel({ lines: ['TOP ▲  START →', 'Orientation test', ''], icon: 'tag' });
     const E = env();
     const g = layout(test, E);
-    const geo = isVariable(media) && labelLengthMm(test, S) == null ? layout(test, E, g.autoF) : g;
-    const sc = scene(geo, g.autoF, S);
+    const f = chooseF(g, S);
+    const geo = isVariable(media) && labelLengthMm(test, S) == null ? layout(test, E, f) : g;
+    const sc = scene(geo, f, S);
     const ss = ssFor(sc.dpi);
     bitmaps = [toBitmap(renderCanvas(sc, ss, customImages), ss, 0.5, sc.ySub)];
   } else {
@@ -911,7 +971,7 @@ async function print(which) {
 function fontCssUrl() {
   const f = FONTS.find(x => x.family === S.font);
   if (!f || f.system) return '';
-  const w = [...new Set([S.w1, S.w2].map(Number))].filter(x => f.weights.includes(x));
+  const w = [...new Set(S.lineW.map(Number))].filter(x => f.weights.includes(x));
   return `https://fonts.googleapis.com/css2?family=${encodeURIComponent(f.family).replace(/%20/g, '+')}${w.length ? ':wght@' + w.sort((a, b) => a - b).join(';') : ''}&display=swap`;
 }
 const customSrc = id => (customIcons.find(c => c.id === id) || {}).src;

@@ -259,6 +259,11 @@ table.labels { width: 100%; border-collapse: collapse; min-width: 980px; }
 .pill { font: 500 12px/1 var(--font-mono); padding: 5px 9px; border-radius: 999px; background: var(--pane-2); color: var(--muted); border: 1px solid var(--line); }
 .pill.on { color: var(--ok); border-color: var(--ok); }
 .pill.busy { color: var(--warn); border-color: var(--warn); }
+.line-specs { width: 100%; border-collapse: collapse; font-size: 13px; }
+.line-specs th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 0 4px 4px; }
+.line-specs td { padding: 2px 4px; }
+.line-specs td:first-child { width: 44px; color: var(--muted); }
+.line-specs input, .line-specs select { width: 100%; min-height: 30px; }
 .native-pick { display: flex; align-items: flex-end; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .native-pick .field { flex: 1 1 180px; }
 .native-pick[hidden], [data-native][hidden], [data-web][hidden] { display: none; }

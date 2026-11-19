@@ -60,7 +60,8 @@ pub fn list() -> Vec<PrinterInfo> {
     {
         out.extend(win::usb_direct_printers());
         out.extend(win::bluetooth_ports());
-        out.extend(win::spooler_printers());
+        // The Windows print queue isn't listed: Brother's port software expects its own job header,
+        // and raw jobs were seen to hang there ("Printing, Retained", 0 bytes).
     }
     #[cfg(not(windows))]
     {
@@ -263,6 +264,7 @@ mod tests {
 // ------------------------------------------------------------------ Windows
 
 #[cfg(windows)]
+#[allow(dead_code)] // spooler_printers and its helpers are kept as a fallback, but not listed
 mod win {
     use super::PrinterInfo;
     use std::collections::HashMap;

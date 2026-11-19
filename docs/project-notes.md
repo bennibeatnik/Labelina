@@ -31,6 +31,20 @@ Last updated: 2026-11-19
 - Probable cause: Labelina sent `ESC i A 01`, which Brother's reference marks as not supported on the PT-P710BT. Removed (cut-each is the default). Also fixed n9 in ESC i z (0 first page, 1 others; it used to send 2 for the last page), and made serial writes chunked and safe against partial resends.
 - **Not yet confirmed on the printer.** Over Bluetooth the app now waits for the "printing completed" status and logs the result, so a stall shows in the log. If it still stalls, suspects are HD (bit 6) on the D610BT and the USB spooler route; ask which connection was used.
 
+## Brother driver capture (2026-11-19, evening) — source of truth for the job format
+- Printed through Brother's own D610BT driver to a FILE with .NET PrintDocument (PrintToFile), then decoded. Brother's stream per job:
+  `ESC i a 01`, `ESC i ! 01` (automatic status off), `ESC i z` (SD: flags 0x84, type 0; **HD: flags 0x86, type 0x09**), `ESC i M 40`, `ESC i K 08` (HD 0x48), `ESC i p 00`, `ESC i L 00 01 01`, `ESC i C 01 ff ff ff` (undocumented, copied verbatim), `ESC i d 0e 00` (HD 1c 00), `M 00` (uncompressed), 16-byte `G` lines, ends with `FF`. It is preceded by a 74-byte "J…BSP21Ar.dll" header meant for Brother's port software.
+- Orientation: the top row of the page goes to the first print-area pin (12 mm: pin 29). Labelina used to send it upside down; it now matches, and old Flip/Mirror settings are reset once (`orientV`).
+- `buildRasterJob` now mirrors this exactly except: it starts with `ESC @` (initialise, documented) and ends with `^Z` (documented last page). If the printer still waits after a job, try ending with `FF` like the driver.
+- Setting the label length through the driver (DEVMODE + its private block) didn't work reliably, so printing through the driver (GDI) was dropped. Capturing to a file still goes through Brother's queue and status monitor; avoid doing it on the user's PC without asking.
+- The Windows-queue entry was removed from the printer list (raw jobs hung there, "Printing, Retained", 0 bytes).
+
+## Text engine rewrite (2026-11-19, evening)
+- The user's complaints: hidden padding above and below text, only line 1 responding to size changes, one layout, QR jumping between sizes or vanishing.
+- Cause: the line height used "HdlkÅ" ascent (Å ring) + full descender + 0.12 em gap for every line, while drawing used less, so text sat centred with space around it. Plus one ratio for all lines and `match` (same size on every label) on by default.
+- Now: each line is measured by its own ink (`actualBoundingBoxAscent/Descent`), so text fills the height exactly; per-line size (`lineRel` % in auto, `linePt` in fixed) and weight (`lineW`); `lineGapMm` line spacing (0 = touching); layouts `row` and `header` (icons on line 1, other lines underneath); QR modules may be fractional (edges snapped to dots) so size is smooth, with `qrSnap` to keep whole modules; QR stops at 1 dot per module instead of vanishing. `match` defaults to off. `chooseF()` decides the line-1 size for both the app and the self-test.
+- The self-test checks all of this, including that text ink reaches rows 0..69 of 70 on 12 mm tape.
+
 ## USB route (2026-11-19, later)
 - The user prints over **USB**. Through the Windows spooler (RAW), a job hung as "Printing, Retained" with 0 bytes; after cancelling and replugging, an *old* label printed. The spooler route is unreliable with Brother's D610BT driver.
 - Fix: open the USB printer-class interface directly (`\\?\USB#VID_04F9&PID_20E1#<serial>#{28d78fad-5a12-11d1-ae5b-0000f803a8c2}`) with shared read/write. No driver swap needed. Verified two-way with a status request: 12 mm tape, media type 0x14 (Flexible ID), no errors. Printing on this route is **not yet confirmed by the user**.
