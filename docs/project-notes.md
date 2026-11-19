@@ -7,6 +7,15 @@ Last updated: 2026-11-19
 - Repo: https://github.com/bennibeatnik/Labelina
 - The auto-save key moved from `partmark-studio-v1` to `labelina-v1`; the app reads the old key once if the new one is empty. Old `.partmark.json` project files still open.
 
+## Desktop app (added 2026-11-19)
+- Why: the user found browser printing a "major drag": Chrome-only, the printer wouldn't stay connected, and USB needed Zadig.
+- Decision: **Tauri 2** wrapper in `desktop/` (not Electron: about 10 MB instead of 150 MB, and the system WebView2 is already on Windows). The web version stays; `IS_NATIVE` in `js/ptouch.js` picks the transport at runtime.
+- USB prints through the **Windows spooler with the RAW datatype** to the installed "Brother PT-D610BT" queue (port USB001). No status read-back on this route. **Not yet tested on hardware**: if Brother's driver turns out not to pass RAW through, the fallback is libusb plus WinUSB (Zadig again) or Bluetooth.
+- Bluetooth: SPP ports are found in the registry (`HKLM\SYSTEM\CurrentControlSet\Enum\BTHENUM\{00001101…}`; instance ids ending in `&<MAC>_C…` are outgoing, all-zero MACs are incoming). Names come from `BTHPORT\Parameters\Devices\<mac>\Name`. On the user's PC: PT-D610BT1200 = COM5 (COM4 is the incoming port).
+- The port is held open, and a failed write reopens it once. The last printer is remembered (`labelina-printer` in localStorage) and reconnected at startup; a manual Disconnect forgets it.
+- The app's localStorage (origin `http://tauri.localhost`) is separate from the browser's, so move work across with Save project / Open.
+- Fonts and libraries are now self-hosted in `vendor/` for both versions.
+
 ## Origin and goal
 - Started as: "can I hack my Brother PT-D610BT to make perfect Gridfinity labels on the machine?"
 - Decision: **no custom firmware.** There's no public work on P-touch firmware, it risks bricking the printer, and new firmware wouldn't change the hardware limits (leader tape, no half-cut). Drive the printer from outside instead.
@@ -41,4 +50,6 @@ Last updated: 2026-11-19
 ## Open questions / next steps
 - Confirm Bluetooth printing and orientation on the real D610BT; record the correct Flip/Mirror defaults.
 - Collect the user's planned updates.
-- Before public hosting: decide on self-hosting fonts and libraries, and pick a domain.
+- Desktop app: test USB printing through the spooler and Bluetooth auto-reconnect on the real printer.
+- Desktop app: GitHub Actions workflow to build installers per release; code signing (unsigned installers trigger SmartScreen).
+- Before public hosting: pick a domain (GitHub Pages is the easy default).

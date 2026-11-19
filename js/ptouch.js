@@ -155,6 +155,28 @@ export async function connectUSB() {
   };
 }
 
+// ------------------------------------------------------------ desktop app (Tauri)
+// In the desktop app the bytes go through Rust (desktop/src-tauri/src/printer.rs):
+// USB prints through the Windows print queue (Brother's driver, RAW data) and
+// Bluetooth holds the COM port open, reopening it if a write fails.
+export const IS_NATIVE = !!(globalThis.__TAURI__ && globalThis.__TAURI__.core);
+const invoke = (cmd, args, opts) => globalThis.__TAURI__.core.invoke(cmd, args, opts);
+
+// [{ kind: 'usb'|'bluetooth'|'serial', address, name, detail }]
+export function listNativePrinters() { return invoke('printer_list'); }
+
+export async function connectNative(p) {
+  await invoke('printer_connect', { target: { kind: p.kind, address: p.address } });
+  return {
+    kind: p.kind === 'usb' ? 'USB' : p.kind === 'bluetooth' ? 'Bluetooth' : 'Serial',
+    name: p.name, native: true,
+    canRead: p.kind !== 'usb', // the Windows print queue is write-only
+    async write(bytes) { await invoke('printer_write', bytes); },
+    async read(n, ms) { const r = await invoke('printer_read', { n, ms }); return r ? new Uint8Array(r) : null; },
+    async close() { try { await invoke('printer_close'); } catch { } },
+  };
+}
+
 export async function connectSerial() {
   if (!('serial' in navigator)) throw new Error('This browser has no Web Serial. Use Chrome or Edge on a desktop computer.');
   const port = await navigator.serial.requestPort({ allowedBluetoothServiceClassIds: [SPP_UUID] });

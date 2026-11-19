@@ -1,0 +1,42 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Labelina",
+  "version": "0.1.0",
+  "identifier": "io.github.bennibeatnik.labelina",
+  "build": {
+    "frontendDist": "../dist",
+    "beforeDevCommand": "node scripts/copy-web.mjs",
+    "beforeBuildCommand": "node scripts/copy-web.mjs"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Labelina",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "shortDescription": "Label studio for parts storage",
+    "longDescription": "Design labels for fasteners, electronics and storage bins, and print them straight to a Brother P-touch.",
+    "category": "Productivity",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

@@ -5,14 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Labelina</title>
 <meta name="description" content="Design labels for fasteners, electronics and storage bins. Export PDF, PNG, SVG, ZPL or print straight to a Brother P-touch from the browser.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=Roboto+Condensed:wght@400;700&family=Inter:wght@400;700&family=Atkinson+Hyperlegible:wght@400;700&family=Archivo+Narrow:wght@400;700&family=Saira+Condensed:wght@400;700&family=Oswald:wght@400;700&family=Bebas+Neue&family=JetBrains+Mono:wght@400;700&display=swap">
+<!-- Fonts and libraries are self-hosted in vendor/ so the studio works offline and makes no third-party requests. -->
+<link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="css/studio.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="vendor/qrcode.min.js"></script>
+<script src="vendor/JsBarcode.all.min.js"></script>
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
 </head>
 <body>
 <!--APP-START-->
@@ -202,6 +201,14 @@
           <button type="button" class="btn ghost" id="connClose" hidden>Disconnect</button>
         </div>
       </div>
+      <!-- Desktop app only: printers come from Windows (USB via the Brother driver) and paired Bluetooth ports. -->
+      <div class="native-pick" id="nativePick" hidden>
+        <label class="field wide"><span>Printer</span><select id="nativePrinter"></select></label>
+        <div class="row-btns">
+          <button type="button" class="btn" id="nativeConnect">Connect</button>
+          <button type="button" class="btn ghost" id="nativeRefresh" title="Look for printers again">Refresh</button>
+        </div>
+      </div>
       <div id="printBody">
         <div class="field-row">
           <label class="field"><span>Output</span><select id="outMode" data-key="outMode"><option value="pages">Separate labels</option><option value="strip">One strip with cut marks</option></select></label>
@@ -220,8 +227,10 @@
         </div>
         <details class="help">
           <summary>Connection help</summary>
-          <p><strong>Bluetooth:</strong> pair the printer in your system's Bluetooth settings first. On Windows it then appears as a COM port; pick it from the list.</p>
-          <p><strong>USB on Windows:</strong> the Brother driver keeps the printer to itself. To use USB from the browser, switch the printer to the WinUSB driver (for example with Zadig). Brother's own software won't see it until you switch back.</p>
+          <p data-native><strong>USB:</strong> install Brother's printer driver and plug the printer in. It appears in the list as a USB printer and prints through Windows; no driver changes are needed. The tape can't be read over USB, so pick the tape size yourself.</p>
+          <p data-native><strong>Bluetooth:</strong> pair the printer in Windows Bluetooth settings first, then press Refresh. Bluetooth can also read which tape is loaded. Labelina reconnects to the last printer automatically.</p>
+          <p data-web><strong>Bluetooth:</strong> pair the printer in your system's Bluetooth settings first. On Windows it then appears as a COM port; pick it from the list.</p>
+          <p data-web><strong>USB on Windows:</strong> the Brother driver keeps the printer to itself. To use USB from the browser, switch the printer to the WinUSB driver (for example with Zadig). Brother's own software won't see it until you switch back. The Labelina desktop app doesn't have this problem.</p>
           <p><strong>Orientation:</strong> print the test label. If the text comes out upside down or mirrored, tick Flip or Mirror.</p>
           <p>Direct printing needs Chrome or Edge on a desktop and a site served over HTTPS (or localhost).</p>
         </details>

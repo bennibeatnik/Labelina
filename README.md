@@ -1,6 +1,11 @@
 # Labelina
 
-A browser-based label studio for parts storage: fasteners, electronics, drawers and bins (Gridfinity included). It runs entirely client-side; there is no backend, no build step and no database.
+A label studio for parts storage: fasteners, electronics, drawers and bins (Gridfinity included). It runs entirely client-side; there is no backend and no database.
+
+It comes two ways from the same code:
+
+- **Desktop app (Windows)**: install it and print straight to a Brother P-touch over USB or Bluetooth. No browser, no driver changes, and it reconnects to your printer automatically. See [Desktop app](#desktop-app).
+- **Web page**: serve the folder from any static host. Design and exports work in every browser; direct printing needs Chrome or Edge.
 
 ## Features
 
@@ -29,9 +34,30 @@ python -m http.server 8000
 Copy the whole folder to any static host (nginx, Apache, Caddy, GitHub Pages, Netlify, Cloudflare Pages, S3). No configuration is needed beyond serving `.js` as `text/javascript`, which every common server does by default.
 
 - **Serve it over HTTPS.** WebUSB and Web Serial only work in a secure context (HTTPS or `localhost`).
-- **Third-party requests**: the page loads fonts from Google Fonts and four libraries from cdnjs (qrcode-generator, JsBarcode, jsPDF, JSZip). If you need to avoid third-party requests (for example under GDPR), download those files, put them in a `vendor/` folder and change the `<link>`/`<script>` URLs in `index.html` and `fontCssUrl()` in `js/app.js`.
+- **No third-party requests**: fonts and the four libraries (qrcode-generator 1.4.4, JsBarcode 3.11.6, jsPDF 2.5.1, JSZip 3.10.1) are self-hosted in `vendor/`. The only outside link is inside exported SVG files, which point at Google Fonts so other programs can render the chosen font (`fontCssUrl()` in `js/app.js`).
+
+## Desktop app
+
+`desktop/` wraps the studio in [Tauri](https://tauri.app). It shows the same pages in WebView2, which is built into Windows 10 and 11, and adds a small Rust backend (`desktop/src-tauri/src/printer.rs`) for printing:
+
+- **USB**: jobs go through the Windows print queue as raw data, so Brother's own driver passes them to the printer. No Zadig/WinUSB swap, and P-touch Editor keeps working. The print queue can't report back, so the loaded tape can't be read over USB.
+- **Bluetooth**: paired printers are listed by name (for example *PT-D610BT1200 · Bluetooth · COM5*). The port stays open between prints and is reopened automatically if the printer slept or was switched off. The tape width and colour are read on connect.
+- The last printer is remembered and reconnected when the app starts. Exports open a normal Save dialog.
+
+Build it (needs Node 18+ and Rust with the MSVC toolchain):
+
+```sh
+cd desktop
+npm install
+npm run dev     # run from source
+npm run build   # installers in desktop/src-tauri/target/release/bundle/ (nsis .exe and .msi)
+```
+
+The build copies `index.html`, `css/`, `js/` and `vendor/` into `desktop/dist`, so edit the files at the repo root, not the copy. To list the printers the app can see without printing anything: `cd desktop/src-tauri && cargo test -- --ignored --nocapture`.
 
 ## Direct printing notes
+
+These notes are for the web page. The desktop app avoids the browser and driver limits.
 
 - Printing works in **Chrome or Edge on desktop** only. Safari and Firefox don't support WebUSB or Web Serial, though every export still works in them.
 - **Bluetooth**: pair the printer in the operating system first. On Windows it then shows up as a COM port in the browser's port picker.
@@ -52,9 +78,11 @@ js/electronics.js   E-series, colour codes, part presets
 js/icons.js         icon library (24 × 24 path data)
 js/media.js         media profiles and sheet templates
 js/codes.js         QR / barcode encoding
-js/ptouch.js        Brother raster protocol + WebUSB / Web Serial transports
+js/ptouch.js        Brother raster protocol + WebUSB / Web Serial / desktop transports
 js/exporters.js     PNG, PDF, ZPL, ZIP, CSV
+vendor/             self-hosted libraries and fonts
 tests/selftest.html renders every category on every media and runs every exporter
+desktop/            Tauri desktop app (Rust printer backend in src-tauri/src/printer.rs)
 ```
 
 ## Extending

@@ -2,7 +2,7 @@ import { ICONS, ICON_MAP, ICON_CATS, paintIcon } from './icons.js';
 import { MEDIA, MEDIA_MAP, TAPE_COLORS } from './media.js';
 import { CODE_TYPES } from './codes.js';
 import { FONTS, layout, scene, renderCanvas, toBitmap, renderSVG, resolveMedia, clearMetrics, labelLengthMm } from './render.js';
-import { buildRasterJob, joinStrip, STATUS_REQUEST, parseStatus, connectUSB, connectSerial } from './ptouch.js';
+import { buildRasterJob, joinStrip, STATUS_REQUEST, parseStatus, connectUSB, connectSerial, IS_NATIVE, listNativePrinters, connectNative } from './ptouch.js';
 import { saveBlob, safeName, canvasToPNG, bitmapCanvas, bitmapToZPL, pdfPerLabel, pdfSheet, zipFiles, labelsToCSV, parseTable } from './exporters.js';
 import { CATEGORIES, COMMON_FIELDS, defaultsFor } from './library.js';
 
@@ -602,7 +602,8 @@ function updateDesignVisibility() {
   $('ratioOut').textContent = Math.round(S.ratio * 100) + '%';
   const tape = m.kind === 'tape';
   $('printBody').hidden = !tape;
-  $('connUsb').hidden = $('connBt').hidden = !tape || !!conn;
+  $('connUsb').hidden = $('connBt').hidden = IS_NATIVE || !tape || !!conn;
+  $('nativePick').hidden = !IS_NATIVE || !tape || !!conn;
   $('connClose').hidden = !conn;
   $('printNA').hidden = tape;
   document.querySelector('[data-exp="bin"]').disabled = !tape;
@@ -708,6 +709,7 @@ function connErr(e, what) {
     log('USB found the printer, but Windows\' Brother driver is holding it, so the browser can\'t open it. Use Bluetooth instead, or switch the printer to the WinUSB driver (see Connection help).', 'err');
     console.warn(e); return;
   }
+  if (IS_NATIVE) { log(msg, 'err'); return; } // messages from the desktop app are already written for people
   const blocked = !window.isSecureContext || /permissions policy|feature .* disallowed/i.test(msg);
   if (blocked) { log(`This page isn't allowed to use ${what} here. Open the studio directly in Chrome or Edge over HTTPS or localhost.`, 'err'); return; }
   log(`${what} error: ${e && e.name ? e.name + ': ' : ''}${msg}`, 'err');
@@ -719,6 +721,48 @@ function setConn(c) {
   pill.classList.toggle('on', !!c);
   updateDesignVisibility();
 }
+// ---- desktop app: printers listed by Windows, last one remembered and reconnected at startup
+const PRINTER_KEY = 'labelina-printer';
+let nativePrinters = [];
+const printerId = p => `${p.kind}:${p.address}`;
+async function refreshNativePrinters() {
+  const sel = $('nativePrinter');
+  try { nativePrinters = await listNativePrinters(); } catch (e) { nativePrinters = []; connErr(e, 'Printer search'); }
+  let saved = null; try { saved = localStorage.getItem(PRINTER_KEY); } catch { }
+  sel.innerHTML = '';
+  if (!nativePrinters.length) sel.add(new Option('No printers found: plug in USB or pair Bluetooth, then Refresh', ''));
+  nativePrinters.forEach(p => sel.add(new Option(`${p.name} · ${p.detail}`, printerId(p))));
+  if (saved && nativePrinters.some(p => printerId(p) === saved)) sel.value = saved;
+  $('nativeConnect').disabled = !nativePrinters.length;
+  return saved;
+}
+async function connectNativeSelected(quiet) {
+  const p = nativePrinters.find(x => printerId(x) === $('nativePrinter').value);
+  if (!p) return;
+  const pill = $('connPill');
+  pill.textContent = `Connecting to ${p.name}…`; pill.classList.add('busy');
+  $('nativeConnect').disabled = true;
+  try {
+    const c = await connectNative(p);
+    try { localStorage.setItem(PRINTER_KEY, printerId(p)); } catch { }
+    setConn(c);
+    log(`Connected to ${p.name} over ${c.kind}.`, 'ok');
+    if (c.canRead) readTape(true);
+  } catch (e) {
+    setConn(null);
+    if (quiet) log(`Couldn't reconnect to ${p.name}. Switch it on and press Connect. (${e})`);
+    else connErr(e, p.name);
+  } finally { pill.classList.remove('busy'); $('nativeConnect').disabled = !nativePrinters.length; }
+}
+async function initNative() {
+  document.querySelectorAll('[data-web]').forEach(el => { el.hidden = true; });
+  $('nativeConnect').addEventListener('click', () => connectNativeSelected(false));
+  $('nativeRefresh').addEventListener('click', () => refreshNativePrinters());
+  const saved = await refreshNativePrinters();
+  updateDesignVisibility();
+  if (saved && nativePrinters.some(p => printerId(p) === saved)) connectNativeSelected(true);
+}
+
 async function doConnect(kind) {
   try {
     const c = kind === 'usb' ? await connectUSB() : await connectSerial();
@@ -730,6 +774,10 @@ async function doConnect(kind) {
 let busy = false;
 async function readTape(quiet) {
   if (!conn) { log('Connect a printer first.', 'err'); return; }
+  if (conn.canRead === false) {
+    if (!quiet) log('Printing over USB goes through Windows, which can\'t report the tape. Pick the tape size under Design, or connect over Bluetooth to read it.');
+    return;
+  }
   if (busy) return;
   busy = true;
   try {
@@ -888,7 +936,11 @@ function wire() {
 
   $('connUsb').addEventListener('click', () => doConnect('usb'));
   $('connBt').addEventListener('click', () => doConnect('bt'));
-  $('connClose').addEventListener('click', async () => { if (conn) await conn.close(); setConn(null); log('Disconnected.'); });
+  $('connClose').addEventListener('click', async () => {
+    if (conn) await conn.close();
+    if (conn && conn.native) { try { localStorage.removeItem(PRINTER_KEY); } catch { } } // don't auto-reconnect after a deliberate disconnect
+    setConn(null); log('Disconnected.');
+  });
   $('checkTape').addEventListener('click', () => readTape(false));
   $('printSel').addEventListener('click', () => print('sel'));
   $('printAll').addEventListener('click', () => print('all'));
@@ -927,7 +979,13 @@ function init() {
   const tabFromHash = () => { const t = document.querySelector(`.tab[data-tab="${location.hash.slice(1)}"]`); if (t) t.click(); };
   tabFromHash();
   window.addEventListener('hashchange', tabFromHash);
-  if (!('usb' in navigator) && !('serial' in navigator)) log('Direct printing needs Chrome or Edge on a desktop computer. Downloads work in any browser.');
+  if (IS_NATIVE) {
+    document.querySelectorAll('[data-native]').forEach(el => { el.hidden = false; });
+    initNative();
+  } else {
+    document.querySelectorAll('[data-native]').forEach(el => { el.hidden = true; });
+    if (!('usb' in navigator) && !('serial' in navigator)) log('Direct printing needs Chrome or Edge on a desktop computer, or the Labelina desktop app. Downloads work in any browser.');
+  }
   if (document.fonts) document.fonts.ready.then(() => { clearMetrics(); fontVersion++; rerender(true); });
   ensureFont();
 }

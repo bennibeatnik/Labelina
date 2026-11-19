@@ -258,6 +258,10 @@ table.labels { width: 100%; border-collapse: collapse; min-width: 980px; }
 .conn { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .pill { font: 500 12px/1 var(--font-mono); padding: 5px 9px; border-radius: 999px; background: var(--pane-2); color: var(--muted); border: 1px solid var(--line); }
 .pill.on { color: var(--ok); border-color: var(--ok); }
+.pill.busy { color: var(--warn); border-color: var(--warn); }
+.native-pick { display: flex; align-items: flex-end; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.native-pick .field { flex: 1 1 180px; }
+.native-pick[hidden], [data-native][hidden], [data-web][hidden] { display: none; }
 #printBody { display: flex; flex-direction: column; gap: 10px; }
 .help { font-size: 12.5px; color: var(--muted); }
 .help summary { cursor: pointer; color: var(--fg); font-weight: 500; }

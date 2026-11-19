@@ -3,6 +3,14 @@
 import { PAGE_SIZES } from './media.js';
 
 export function saveBlob(blob, name) {
+  // Desktop app: show a native Save dialog instead of a browser download.
+  const tauri = globalThis.__TAURI__;
+  if (tauri && tauri.core) {
+    blob.arrayBuffer()
+      .then(buf => tauri.core.invoke('save_file', new Uint8Array(buf), { headers: { 'x-file-name': encodeURIComponent(name) } }))
+      .catch(e => alert(`Couldn't save ${name}: ${e}`));
+    return;
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

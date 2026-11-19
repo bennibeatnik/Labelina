@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <rect width="1024" height="1024" rx="220" fill="#263140"/>
+  <rect x="112" y="332" width="800" height="360" rx="28" fill="#f2cd2f"/>
+  <rect x="112" y="652" width="800" height="40" rx="0" fill="#000" opacity="0.10"/>
+  <g fill="#151515" opacity="0.28">
+    <rect x="146" y="352" width="22" height="22"/><rect x="146" y="396" width="22" height="22"/><rect x="146" y="440" width="22" height="22"/><rect x="146" y="484" width="22" height="22"/><rect x="146" y="528" width="22" height="22"/><rect x="146" y="572" width="22" height="22"/><rect x="146" y="616" width="22" height="22"/>
+    <rect x="856" y="352" width="22" height="22"/><rect x="856" y="396" width="22" height="22"/><rect x="856" y="440" width="22" height="22"/><rect x="856" y="484" width="22" height="22"/><rect x="856" y="528" width="22" height="22"/><rect x="856" y="572" width="22" height="22"/><rect x="856" y="616" width="22" height="22"/>
+  </g>
+  <g fill="#151515">
+    <rect x="277" y="402" width="62" height="220"/>
+    <rect x="277" y="560" width="172" height="62"/>
+    <path fill-rule="evenodd" d="M497 622 L580 402 L652 402 L735 622 L668 622 L653 580 L579 580 L564 622 Z M597 527 L635 527 L616 470 Z"/>
+  </g>
+</svg>
