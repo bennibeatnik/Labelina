@@ -23,6 +23,9 @@ try {
       const lbl = { lines: [...it.lines, '', ''].slice(0, 3), icon: it.icon || '', icon2: it.icon2 || '', codeType: it.codeType || 'none', code: it.code || '', len: null };
       const g = R.layout(lbl, env); const g2 = R.layout(lbl, env, g.autoF); const sc = R.scene(g2, g.autoF, st);
       if (!(sc.W > 0 && sc.H > 0)) throw new Error('bad size ' + media.id);
+      const cb = g2.codeBox, tb = g2.textBox;
+      if (cb && !cb.below && pos === 'right' && g2.lines.length && cb.x < tb.x + tb.w - 1) throw new Error(`code overlaps text on ${media.id} ${mode} "${lbl.lines[0]}"`);
+      if (cb && cb.x + (cb.side || cb.w) > sc.W + 1) throw new Error(`code runs past the label end on ${media.id} ${mode}`);
       for (const it2 of sc.items) if (it2.k === 'text' && !(it2.size > 0)) throw new Error('bad text size ' + media.id + ' ' + lbl.lines[0]);
       sc.errors.forEach(e => errs.add(e.replace(/“.*”/, '“…”')));
       n++;

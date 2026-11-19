@@ -10,7 +10,8 @@ It comes two ways from the same code:
 ## Features
 
 - **Parts library** with generators for screws and bolts (15 head types, 7 drives, metric and UNC/UNF, coarse/fine pitch, standard lengths per size, key/wrench sizes, ISO/DIN numbers), nuts, washers (with ID × OD × thickness), threaded inserts, standoffs, pins, clips and rivets. Electronics: resistors (E-series ranges, colour bands, SMD codes), capacitors (marking codes), inductors, diodes, transistors, ICs, regulators, LEDs, connectors, pin headers, wire, heat shrink, crystals, fuses, switches and batteries. Pick several sizes and lengths to generate a whole set of labels at once.
-- **About 90 built-in icons**, including head profiles and drive symbols, plus uploaded images.
+- **About 90 built-in icons**, including head profiles and drive symbols, plus uploaded images. Icons take only their drawn width, so they sit tight against each other and the text.
+- **Layout controls**: up to 5 text lines (for 18 and 24 mm tape), icon and second-icon size, gap between groups and between the icons, padding, tape edge, code on the left, right or below, QR border (0, 1, 2 or 4 modules) and **code size per tape width**. On fixed-length labels the icons and code shrink to leave room for the text instead of overlapping it.
 - **Media**: Brother P-touch TZe tape (3.5–24 mm) in standard 180 × 180 dpi or **HD 180 × 360 dpi**, Brother HSe heat-shrink tube (2:1 and 3:1, nine sizes), Brother QL rolls, Dymo LabelWriter, 203 dpi thermal labels, label sheets (A4/Letter templates) and custom sizes. Tape length can fit the content, be fixed, follow grid units (42 mm Gridfinity by default), or use a **length preset**: SLICC 33 mm and 63 mm (cut at exactly that length with the smallest margins the printer allows) plus common lengths.
 - **Codes**: QR, Code 128, Code 39, EAN-13 and UPC-A. Modules are snapped to whole printer dots.
 - **Exports**: PDF sheet, PDF per label, PNG (printer-exact 1-bit with correct DPI metadata), PNG set (.zip), SVG, SVG set (.zip), ZPL, P-touch raster job (.bin) and CSV. Projects save and load as JSON and auto-save in the browser.
@@ -96,7 +97,7 @@ desktop/            Tauri desktop app (Rust printer backend in src-tauri/src/pri
 
 ## Extending
 
-- **New library category**: add an object to `CATEGORIES` in `js/library.js` with `fields` (types `select`, `chips`, `text`, `textarea`, `check`, `icon`) and a `build(values)` that returns `{ lines: [l1, l2, l3], icon, icon2 }` rows.
+- **New library category**: add an object to `CATEGORIES` in `js/library.js` with `fields` (types `select`, `chips`, `text`, `textarea`, `check`, `icon`) and a `build(values)` that returns `{ lines: [l1, l2, l3, (l4, l5)], icon, icon2 }` rows.
 - **New icon**: add an entry to `ICONS` in `js/icons.js`. Parts are SVG path strings on a 24 × 24 grid: `f` fill, `e` even-odd fill, `s` stroke, `d` dashed stroke, `w`/`wf` knock-out in the paper colour.
 - **New media or sheet template**: add an entry to `MEDIA` in `js/media.js`.
 

@@ -96,13 +96,19 @@
         <legend>Layout</legend>
         <div class="field-row">
           <label class="field"><span>Text align</span><select id="align" data-key="align"><option value="left">Left</option><option value="center">Centre</option></select></label>
-          <label class="field"><span>Code position</span><select id="codePos" data-key="codePos"><option value="right">Right</option><option value="below">Below (tall labels)</option></select></label>
+          <label class="field"><span>Code position</span><select id="codePos" data-key="codePos"><option value="right">Right</option><option value="left">Left</option><option value="below">Below (barcodes, tall labels)</option></select></label>
         </div>
-        <label class="field wide"><span>Icon size <output id="iconScaleOut"></output></span><input type="range" id="iconScale" data-key="iconScale" min="0.5" max="1" step="0.05"></label>
+        <label class="field wide"><span>Icon size <output id="iconScaleOut"></output></span><input type="range" id="iconScale" data-key="iconScale" min="0.3" max="1" step="0.05"></label>
+        <label class="field wide"><span>Second icon size <output id="iconScale2Out"></output></span><input type="range" id="iconScale2" data-key="iconScale2" min="0.3" max="1" step="0.05"></label>
+        <label class="field wide"><span>Code size <output id="codeScaleOut"></output> <small id="codeScaleFor"></small></span><input type="range" id="codeScale" min="0.3" max="1" step="0.05"></label>
         <div class="field-row">
-          <label class="field"><span>Padding mm</span><input type="number" id="padMm" data-key="padMm" min="0" max="10" step="0.25"></label>
-          <label class="field"><span>Gap mm</span><input type="number" id="gapMm" data-key="gapMm" min="0" max="10" step="0.25"></label>
-          <label class="field" id="fEdge"><span>Tape edge mm</span><input type="number" id="edgeMm" data-key="edgeMm" min="0" max="3" step="0.05"></label>
+          <label class="field"><span>Padding mm</span><input type="number" id="padMm" data-key="padMm" min="0" max="10" step="0.25" title="Space between the content and the ends of the label"></label>
+          <label class="field"><span>Gap mm</span><input type="number" id="gapMm" data-key="gapMm" min="0" max="10" step="0.25" title="Space between icons, text and code"></label>
+          <label class="field"><span>Icon gap mm</span><input type="number" id="iconGapMm" data-key="iconGapMm" min="0" max="10" step="0.25" title="Space between the two icons"></label>
+        </div>
+        <div class="field-row">
+          <label class="field" id="fEdge"><span>Tape edge mm</span><input type="number" id="edgeMm" data-key="edgeMm" min="0" max="3" step="0.05" title="Space between the content and the tape's long edges"></label>
+          <label class="field"><span>QR border</span><select id="qrQuiet" data-key="qrQuiet" title="Blank modules around a QR code. The standard asks for 4; most phones read 1 fine."><option value="0">None</option><option value="1">1 module (tight)</option><option value="2">2 modules</option><option value="4">4 modules (standard)</option></select></label>
         </div>
         <div class="field-row">
           <label class="field"><span>Border</span><select id="border" data-key="border"><option value="none">None</option><option value="line">Square</option><option value="round">Rounded</option></select></label>
@@ -118,6 +124,7 @@
       <fieldset class="group">
         <legend>Text</legend>
         <label class="field wide"><span>Typeface</span><select id="font" data-key="font"></select></label>
+        <label class="field wide"><span>Text lines</span><select id="lineCount" data-key="lineCount" title="More lines suit taller tape (18 and 24 mm)"><option value="3">3 lines</option><option value="4">4 lines</option><option value="5">5 lines (tall tape)</option></select></label>
         <div class="field-row">
           <label class="field"><span>Line 1 weight</span><select id="w1" data-key="w1"><option value="400">Regular</option><option value="500">Medium</option><option value="600">Semibold</option><option value="700">Bold</option></select></label>
           <label class="field"><span>Other lines</span><select id="w2" data-key="w2"><option value="400">Regular</option><option value="500">Medium</option><option value="600">Semibold</option><option value="700">Bold</option></select></label>
@@ -188,7 +195,7 @@
     <div class="table-wrap">
       <table class="labels">
         <thead><tr>
-          <th class="c-thumb">Preview</th><th class="c-l1">Line 1</th><th class="c-l2">Line 2</th><th class="c-l2">Line 3</th><th>Icons</th><th>Code</th>
+          <th class="c-thumb">Preview</th><th class="c-l1">Line 1</th><th class="c-l2">Line 2</th><th class="c-l2">Line 3</th><th class="c-l2" id="lineHead4">Line 4</th><th class="c-l2" id="lineHead5">Line 5</th><th>Icons</th><th>Code</th>
           <th class="c-len" id="lenHead">Length</th><th class="c-qty">Qty</th><th class="c-act"><span class="sr">Actions</span></th>
         </tr></thead>
         <tbody id="labelRows"></tbody>

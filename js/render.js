@@ -2,7 +2,7 @@
 // dpi so barcode and QR modules fall on whole dots. A layout produces a
 // "scene" (a list of primitives) that the canvas and SVG renderers share.
 
-import { paintIcon, iconSVG, ICON_MAP } from './icons.js';
+import { paintIcon, iconSVG, iconInkBounds, ICON_MAP } from './icons.js';
 import { encodeCode } from './codes.js';
 
 export const FONTS = [
@@ -65,7 +65,8 @@ export function labelLengthMm(lbl, style) {
 }
 
 function textLines(lbl, style) {
-  const lines = (lbl.lines || []).map(s => (s || '').trim()).filter(Boolean);
+  // Only the lines the list shows (Text lines setting); empty lines are skipped.
+  const lines = (lbl.lines || []).slice(0, +style.lineCount || 3).map(s => (s || '').trim()).filter(Boolean);
   if (style.upper && lines[0]) lines[0] = lines[0].toUpperCase();
   return lines;
 }
@@ -96,58 +97,71 @@ export function layout(lbl, env, fontPx) {
   let ih = H - 2 * edge;
   const iy = edge;
 
-  // Code
-  let codeBox = null, code = null;
+  // Row layout: [code left] [icons] [text] [code right], or the code in a strip below.
+  // `gap` separates those groups; `iconGap` separates the two icons. Icons take only their
+  // drawn width (not a square box), so they sit right next to each other and the text.
+  const iconGap = Math.round((style.iconGapMm != null && style.iconGapMm !== '' ? +style.iconGapMm : 0.5) * k);
+  const codeScale = Math.min(1, Math.max(0.2, +(env.codeScale ?? style.codeScale ?? 1) || 1));
+  const qrQuiet = Math.max(0, Math.round(+(style.qrQuiet ?? 1)));
+  const codePos = style.codePos || 'right';
+  let code = null;
   if (style.showCode !== false && lbl.codeType && lbl.codeType !== 'none' && lbl.code) {
     code = encodeCode(lbl.codeType, lbl.code);
     if (code && code.error) { errors.push(code.error); code = null; }
   }
   const mdefault = Math.max(1, Math.round(dpi / 90));
-  let codeW = 0, belowH = 0;
-  if (code && code.kind === 'qr') {
-    const q = code.n + 2;
-    let mod = Math.floor(ih / q);
-    mod -= mod % ySub; // keep modules square once rows are merged
-    if (mod < ySub) { errors.push('QR code is too dense for this label height'); code = null; }
-    else {
-      if (mod === ySub && dpi / ySub < 250) errors.push('QR modules are 1 dot wide; phones may struggle to scan it');
-      const side = mod * q;
-      let y = iy + Math.floor((ih - side) / 2);
-      y -= y % ySub; // start on a printer dot
-      codeBox = { kind: 'qr', mod, side, y };
-      codeW = side;
-    }
-  } else if (code && code.kind === 'bar') {
-    const n = code.bits.length, quiet = 8;
-    const below = style.codePos === 'below' && ih >= Math.round(11 * k);
-    if (below) {
-      belowH = Math.round(ih * 0.4);
-      let mod = mdefault;
-      if (W != null) mod = Math.min(mdefault, Math.floor((W - 2 * pad) / (n + 2 * quiet)));
-      if (mod < 1) { errors.push('Barcode is too long for this label'); code = null; belowH = 0; }
-      else codeBox = { kind: 'bar', below: true, mod, w: mod * n, h: belowH, y: iy + ih - belowH };
-    } else {
-      let mod = mdefault;
-      if (W != null) mod = Math.min(mdefault, Math.floor(((W - 2 * pad) * 0.62) / (n + 2 * quiet)));
-      if (mod < 1) { errors.push('Barcode is too long for this label; try a QR code'); code = null; }
+  const below = !!code && code.kind === 'bar' && codePos === 'below' && ih >= Math.round(11 * k);
+
+  // Builds the code and icons at scale f (1 = as set). Fixed lengths retry with a smaller f
+  // until the text has room, instead of overlapping it.
+  const build = f => {
+    const errs = [];
+    let codeBox = null, codeW = 0, belowH = 0;
+    if (code && code.kind === 'qr') {
+      const q = code.n + 2 * qrQuiet;
+      let mod = Math.floor(ih * codeScale * f / q);
+      mod -= mod % ySub; // keep modules square once rows are merged
+      if (mod < ySub) errs.push('QR code is too dense for this label height');
       else {
-        if (mod === 1 && dpi < 250) errors.push('Barcode bars are 1 dot wide; scanning may be unreliable');
-        codeBox = { kind: 'bar', mod, w: mod * n, h: ih, y: iy, quiet: mod * quiet };
-        codeW = mod * (n + 2 * quiet) - gap; // left quiet zone doubles as the gap
+        if (mod === ySub && dpi / ySub < 250) errs.push('QR modules are 1 dot wide; phones may struggle to scan it');
+        const side = mod * q;
+        let y = iy + Math.floor((ih - side) / 2);
+        y -= y % ySub; // start on a printer dot
+        codeBox = { kind: 'qr', mod, side, quiet: qrQuiet, y };
+        codeW = side;
+      }
+    } else if (code && code.kind === 'bar') {
+      const n = code.bits.length, quiet = 8;
+      if (below) {
+        belowH = Math.round(ih * 0.4 * codeScale);
+        let mod = mdefault;
+        if (W != null) mod = Math.min(mdefault, Math.floor((W - 2 * pad) / (n + 2 * quiet)));
+        if (mod < 1) { errs.push('Barcode is too long for this label'); belowH = 0; }
+        else codeBox = { kind: 'bar', below: true, mod, w: mod * n, h: belowH, y: iy + ih - belowH };
+      } else {
+        let mod = mdefault;
+        if (W != null) mod = Math.min(mdefault, Math.floor(((W - 2 * pad) * 0.62 * f) / (n + 2 * quiet)));
+        if (mod < 1) errs.push('Barcode is too long for this label; try a QR code');
+        else {
+          if (mod === 1 && dpi < 250) errs.push('Barcode bars are 1 dot wide; scanning may be unreliable');
+          const h = Math.max(1, Math.round(ih * codeScale));
+          codeBox = { kind: 'bar', mod, w: mod * n, h, y: iy + Math.floor((ih - h) / 2), quiet: mod * quiet };
+          codeW = mod * (n + 2 * quiet);
+        }
       }
     }
-  }
-  const textH = belowH ? ih - belowH - gap : ih;
-
-  // Icons
-  const icons = [];
-  if (style.showIcon !== false && lbl.icon && (ICON_MAP[lbl.icon] || lbl.icon.startsWith('img-'))) {
-    icons.push({ id: lbl.icon, side: Math.max(4, Math.round(textH * (+style.iconScale || 1))) });
-  }
-  if (style.showIcon2 !== false && lbl.icon2 && (ICON_MAP[lbl.icon2] || lbl.icon2.startsWith('img-'))) {
-    icons.push({ id: lbl.icon2, side: Math.max(4, Math.round(textH * (+style.iconScale || 1) * 0.66)) });
-  }
-  const iconsW = icons.reduce((s, ic) => s + ic.side + gap, 0);
+    const textH = belowH ? ih - belowH - gap : ih;
+    const icons = [];
+    const addIcon = (id, scale) => {
+      const side = Math.max(4, Math.round(textH * scale * f));
+      const b = iconInkBounds(id, env.customImages);
+      icons.push({ id, side, off: Math.round(b.x0 * side), w: Math.max(1, Math.round((b.x1 - b.x0) * side)) });
+    };
+    if (style.showIcon !== false && lbl.icon && (ICON_MAP[lbl.icon] || lbl.icon.startsWith('img-'))) addIcon(lbl.icon, +style.iconScale || 1);
+    if (style.showIcon2 !== false && lbl.icon2 && (ICON_MAP[lbl.icon2] || lbl.icon2.startsWith('img-'))) addIcon(lbl.icon2, +(style.iconScale2 ?? 0.65) || 0.65);
+    const iconsW = icons.reduce((s, ic) => s + ic.w, 0) + Math.max(0, icons.length - 1) * iconGap;
+    return { codeBox, codeW, belowH, textH, icons, iconsW, errs };
+  };
 
   // Text
   const lines = textLines(lbl, style);
@@ -157,18 +171,49 @@ export function layout(lbl, env, fontPx) {
   const heightUnits = n ? (m.a + m.d) * (1 + r * (n - 1)) + 0.12 * (n - 1) : 1;
   const unitWidths = lines.map((s, i) => textWidth(s, fam, i ? w2 : w1) * (i ? r : 1));
   const maxUnitW = Math.max(0, ...unitWidths);
+
+  // Width taken by everything except the text, including the gaps around the text.
+  const sideW = B => (B.icons.length ? B.iconsW + gap : 0) + (B.codeW ? B.codeW + gap : 0);
+  let B = build(1);
+  if (W != null && n) {
+    // Keep at least ~40% of the length for text (or what it needs at full height, if less).
+    const inner = W - 2 * pad;
+    const want = Math.min(Math.round(inner * 0.4), Math.ceil(maxUnitW * B.textH / heightUnits));
+    let f = 1;
+    for (let i = 0; i < 6 && inner - sideW(B) < want; i++) {
+      const shrinkable = B.iconsW + B.codeW;
+      if (!shrinkable || f <= 0.3) break;
+      const fixed = sideW(B) - shrinkable;
+      f = Math.max(0.3, f * Math.max(0.3, (inner - want - fixed) / shrinkable) * 0.98);
+      B = build(f);
+    }
+    // Never let icons and code run past the label, even if that leaves no room for text.
+    for (let i = 0; i < 6 && sideW(B) > inner && f > 0.05; i++) {
+      const shrinkable = B.iconsW + B.codeW;
+      if (!shrinkable) break;
+      const fixed = sideW(B) - shrinkable;
+      f = Math.max(0.05, f * Math.max(0.05, (inner - fixed) / shrinkable) * 0.98);
+      B = build(f);
+    }
+    if (sideW(B) > inner) errors.push("The icons and code don't fit on this label; make it longer or hide one");
+    else if (f < 0.999) errors.push('Icons and code were shrunk to make room for the text');
+  }
+  errors.push(...B.errs);
+  const { codeBox, codeW, textH, icons, iconsW } = B;
+  if (!codeBox) code = null;
   const fH = n ? textH / heightUnits : 0;
 
   let textW, autoF;
   if (W == null) {
     autoF = fH;
     const f = fontPx != null ? fontPx : (style.sizeMode === 'fixed' ? Math.min(fH, (+style.pt || 12) * dpi / 72) : fH);
-    textW = Math.ceil(maxUnitW * f) + 2;
-    W = Math.max(Math.round(6 * k), 2 * pad + iconsW + textW + (codeW ? codeW + gap : 0));
+    textW = n ? Math.ceil(maxUnitW * f) + 2 : 0;
+    const side = n ? sideW(B) : Math.max(0, sideW(B) - gap); // no gap before missing text
+    W = Math.max(Math.round(6 * k), 2 * pad + side + textW);
     if (codeBox && codeBox.below) W = Math.max(W, 2 * pad + codeBox.w + 16 * codeBox.mod);
     fontPx = f;
   } else {
-    textW = W - 2 * pad - iconsW - (codeW ? codeW + gap : 0);
+    textW = W - 2 * pad - sideW(B);
     if (textW < Math.round(3 * k) && n) errors.push('Not enough room for the text');
     const fW = maxUnitW > 0 ? Math.max(0, textW) / maxUnitW : Infinity;
     autoF = Math.min(fH, fW);
@@ -176,16 +221,19 @@ export function layout(lbl, env, fontPx) {
 
   // Place
   let x = pad;
-  const iconBoxes = icons.map(ic => {
-    const b = { id: ic.id, x, y: iy + Math.floor((textH - ic.side) / 2), side: ic.side };
-    x += ic.side + gap;
+  if (codeBox && !codeBox.below && codePos === 'left') {
+    codeBox.x = codeBox.kind === 'qr' ? x : x + codeBox.quiet;
+    x += codeW + gap;
+  }
+  const iconBoxes = icons.map((ic, i) => {
+    const b = { id: ic.id, x: x - ic.off, y: iy + Math.floor((textH - ic.side) / 2), side: ic.side };
+    x += ic.w + (i < icons.length - 1 ? iconGap : gap);
     return b;
   });
   const textBox = { x, y: iy, w: Math.max(0, textW), h: textH };
   if (codeBox) {
-    if (codeBox.kind === 'qr') codeBox.x = W - pad - codeBox.side;
-    else if (codeBox.below) codeBox.x = Math.round((W - codeBox.w) / 2);
-    else codeBox.x = W - pad - codeBox.quiet - codeBox.w;
+    if (codeBox.below) codeBox.x = Math.round((W - codeBox.w) / 2);
+    else if (codePos !== 'left') codeBox.x = codeBox.kind === 'qr' ? W - pad - codeBox.side : W - pad - codeBox.quiet - codeBox.w;
   }
   return { W, H, dpi, k, ySub, lines, unitWidths, metrics: m, iconBoxes, textBox, codeBox, code, autoF, errors, fam, w1, w2, r, fontPx };
 }
@@ -214,11 +262,11 @@ export function scene(geo, f, style) {
   if (cb && geo.code) {
     const rects = [];
     if (cb.kind === 'qr') {
-      const n = geo.code.n, g = geo.code.grid, md = cb.mod;
+      const n = geo.code.n, g = geo.code.grid, md = cb.mod, qz = cb.quiet ?? 1;
       for (let r = 0; r < n; r++) {
         let c = 0;
         while (c < n) {
-          if (g[r * n + c]) { let e = c; while (e < n && g[r * n + e]) e++; rects.push([cb.x + (c + 1) * md, cb.y + (r + 1) * md, (e - c) * md, md]); c = e; } else c++;
+          if (g[r * n + c]) { let e = c; while (e < n && g[r * n + e]) e++; rects.push([cb.x + (c + qz) * md, cb.y + (r + qz) * md, (e - c) * md, md]); c = e; } else c++;
         }
       }
     } else {

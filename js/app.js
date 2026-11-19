@@ -14,16 +14,18 @@ const LEGACY_STORE_KEY = 'partmark-studio-v1'; // pre-rename auto-save, read onc
 const DEFAULTS = {
   media: 'tze-12', customW: 60, customH: 20, customDpi: '300', hd: '',
   lengthPreset: '', lengthMode: 'auto', lengthMm: 40, unitPitch: 42, unitInset: 6, tapeColor: 'bw',
-  align: 'left', codePos: 'right', iconScale: 1, padMm: 1.5, gapMm: 1, edgeMm: 0, border: 'none', invert: false,
+  align: 'left', codePos: 'right', iconScale: 1, iconScale2: 0.65, iconGapMm: 0.5, padMm: 1.5, gapMm: 1, edgeMm: 0, border: 'none', invert: false,
+  codeScale: 1, codeScales: {}, qrQuiet: 1, lineCount: 3,
   showIcon: true, showIcon2: true, showCode: true,
   font: 'Roboto Condensed', w1: '700', w2: '400', sizeMode: 'auto', pt: 14, ratio: 0.66, match: true, upper: false,
   zoom: 'fit', outMode: 'pages', cutMode: 'each', marginMm: 2, flip: false, mirror: false, sheetPage: 'a4', skipSlots: 0,
 };
 
+const MAX_LINES = 5;
 let uid = 1;
 const newId = () => 'L' + (Date.now().toString(36)) + (uid++).toString(36);
 const mkLabel = (o = {}) => ({
-  id: newId(), lines: [...(o.lines || ['', '', '']), '', '', ''].slice(0, 3), icon: o.icon || '', icon2: o.icon2 || '',
+  id: newId(), lines: [...(o.lines || []), '', '', '', '', ''].slice(0, MAX_LINES), icon: o.icon || '', icon2: o.icon2 || '',
   codeType: o.codeType || 'none', code: o.code || '', len: o.len ?? null, qty: o.qty || 1,
 });
 
@@ -90,8 +92,10 @@ const isVariable = m => m.kind === 'tape' || m.kind === 'continuous';
 const isMono = m => m.kind !== 'sheet';
 function env() {
   const media = currentMedia();
-  return { media, style: S, feedMm: feedMmFor(media) };
+  return { media, style: S, feedMm: feedMmFor(media), codeScale: codeScaleFor(S.media), customImages };
 }
+// Code size is remembered per tape/stock, since what suits 6 mm tape doesn't suit 24 mm.
+function codeScaleFor(mediaId) { const v = (S.codeScales || {})[mediaId]; return v != null ? +v : 1; }
 // Blank tape at each end of a label. P-touch printers won't go below 2 mm, so the layout
 // uses the same value the printer will, which keeps fixed lengths exact.
 function feedMmFor(media) {
@@ -318,8 +322,9 @@ function makeRow(l) {
   const thumb = td();
   thumb.innerHTML = '<div class="thumb"><canvas></canvas><span class="flag" hidden></span></div>';
   thumb.firstChild.addEventListener('click', () => select(l.id));
-  ['l1', 'l2', 'l3'].forEach((cls, i) => {
+  ['l1', 'l2', 'l3', 'l4', 'l5'].forEach((cls, i) => {
     const c = td(cls);
+    c.hidden = i >= (+S.lineCount || 3);
     const inp = document.createElement('input');
     inp.type = 'text'; inp.value = l.lines[i] || ''; inp.id = `${l.id}-line${i + 1}`;
     inp.setAttribute('aria-label', `Line ${i + 1}`);
@@ -369,6 +374,8 @@ function buildTable() {
   tb.innerHTML = '';
   labels.forEach(l => tb.appendChild(makeRow(l)));
   $('lenHead').hidden = !lenColumnVisible();
+  $('lineHead4').hidden = (+S.lineCount || 3) < 4;
+  $('lineHead5').hidden = (+S.lineCount || 3) < 5;
   $('lenHead').textContent = S.lengthMode === 'units' ? 'Units' : 'mm';
   $('emptyList').hidden = labels.length > 0;
 }
@@ -536,7 +543,7 @@ function libBuild() {
   try { items = cat.build(v) || []; } catch (e) { console.error(e); items = []; }
   let n = parseInt(v.skuStart, 10) || 1;
   return items.map(it => {
-    const lines = [...it.lines, '', '', ''].slice(0, 3);
+    const lines = [...it.lines, '', '', '', '', ''].slice(0, MAX_LINES);
     let codeType = 'none', code = '';
     if (v.codeType && v.codeType !== 'none') {
       codeType = v.codeType;
@@ -614,6 +621,11 @@ function updateDesignVisibility() {
   $('fEdge').hidden = m.kind !== 'tape';
   $('fPt').hidden = S.sizeMode !== 'fixed';
   $('iconScaleOut').textContent = Math.round(S.iconScale * 100) + '%';
+  $('iconScale2Out').textContent = Math.round((S.iconScale2 ?? 0.66) * 100) + '%';
+  const cs = codeScaleFor(S.media);
+  $('codeScale').value = cs;
+  $('codeScaleOut').textContent = Math.round(cs * 100) + '% of the height';
+  $('codeScaleFor').textContent = `(for ${m.custom ? 'custom size' : m.name})`;
   $('ratioOut').textContent = Math.round(S.ratio * 100) + '%';
   const tape = m.kind === 'tape';
   $('printBody').hidden = !tape;
@@ -665,13 +677,13 @@ function onControl(el) {
   else if ((key === 'lengthMode' || key === 'lengthMm') && S.lengthPreset) { S.lengthPreset = ''; $('lengthPreset').value = ''; }
   updateDesignVisibility();
   if (key === 'font' || key === 'w1' || key === 'w2') ensureFont();
-  if (key === 'media' || key === 'lengthMode' || key === 'lengthPreset') buildTable();
+  if (key === 'media' || key === 'lengthMode' || key === 'lengthPreset' || key === 'lineCount') buildTable();
   rerender(true);
 }
 
 // ----------------------------------------------------------------- import
 const HEADER_MAP = [
-  [/^(line ?1|text|label|name|title|part)$/i, 'l1'], [/^(line ?2|sub(title)?|desc(ription)?|detail)$/i, 'l2'], [/^(line ?3|note|spec(s)?)$/i, 'l3'],
+  [/^(line ?1|text|label|name|title|part)$/i, 'l1'], [/^(line ?2|sub(title)?|desc(ription)?|detail)$/i, 'l2'], [/^(line ?3|note|spec(s)?)$/i, 'l3'], [/^line ?4$/i, 'l4'], [/^line ?5$/i, 'l5'],
   [/^(icon ?1?|graphic|symbol)$/i, 'icon'], [/^(icon ?2|drive)$/i, 'icon2'], [/^(code|qr|barcode|sku|url)$/i, 'code'],
   [/^(code[ _]?type|format)$/i, 'codeType'], [/^(len(gth)?|units?|u|size)$/i, 'len'], [/^(qty|copies|count|quantity)$/i, 'qty'],
 ];
@@ -701,7 +713,7 @@ function importRows(replace) {
     const g = key => { const i = map.indexOf(key); return i >= 0 ? (r[i] || '').trim() : ''; };
     const code = g('code');
     return {
-      lines: [g('l1'), g('l2'), g('l3')], icon: findIcon(g('icon')), icon2: findIcon(g('icon2')),
+      lines: [g('l1'), g('l2'), g('l3'), g('l4'), g('l5')], icon: findIcon(g('icon')), icon2: findIcon(g('icon2')),
       code, codeType: code ? findCodeType(g('codeType'), code) : 'none',
       len: g('len') ? +g('len') || null : null, qty: Math.max(1, parseInt(g('qty'), 10) || 1),
     };
@@ -988,6 +1000,10 @@ function wire() {
   });
 
   $('iconSearch').addEventListener('input', e => buildIconGrid(null, e.target.value));
+  $('codeScale').addEventListener('input', e => {
+    S.codeScales = { ...(S.codeScales || {}), [S.media]: +e.target.value };
+    updateDesignVisibility(); rerender(true);
+  });
 
   $('connUsb').addEventListener('click', () => doConnect('usb'));
   $('connBt').addEventListener('click', () => doConnect('bt'));

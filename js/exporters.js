@@ -155,8 +155,8 @@ export async function zipFiles(files) {
 // ---- CSV ----
 const csvCell = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
 export function labelsToCSV(labels) {
-  const head = ['line1', 'line2', 'line3', 'icon', 'icon2', 'code_type', 'code', 'length', 'qty'];
-  const rows = labels.map(l => [l.lines[0], l.lines[1], l.lines[2], l.icon, l.icon2, l.codeType, l.code, l.len ?? '', l.qty]);
+  const head = ['line1', 'line2', 'line3', 'line4', 'line5', 'icon', 'icon2', 'code_type', 'code', 'length', 'qty'];
+  const rows = labels.map(l => [l.lines[0], l.lines[1], l.lines[2], l.lines[3] || '', l.lines[4] || '', l.icon, l.icon2, l.codeType, l.code, l.len ?? '', l.qty]);
   return [head, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }
 

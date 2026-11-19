@@ -215,6 +215,33 @@ export function paintIcon(ctx, id, x, y, side, ink, paper, customImages) {
   ctx.restore();
 }
 
+// Horizontal ink extent of an icon as fractions of its square box: { x0, x1 }.
+// Layout uses it so a narrow icon (a screw seen from the side) takes only the room it needs.
+const boundsCache = new Map();
+export function iconInkBounds(id, customImages) {
+  const img = id && id.startsWith('img-') ? customImages && customImages.get(id) : null;
+  if (id && id.startsWith('img-')) {
+    if (!img || !img.complete || !img.naturalWidth) return { x0: 0, x1: 1 };
+    const w = Math.min(1, img.naturalWidth / img.naturalHeight); // drawn "contain", centred
+    return { x0: (1 - w) / 2, x1: (1 + w) / 2 };
+  }
+  let b = boundsCache.get(id);
+  if (b) return b;
+  b = { x0: 0, x1: 1 };
+  if (ICON_MAP[id] && typeof document !== 'undefined') {
+    const N = 96;
+    const c = document.createElement('canvas'); c.width = c.height = N;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    paintIcon(ctx, id, 0, 0, N, '#000', 'rgba(0,0,0,0)');
+    const a = ctx.getImageData(0, 0, N, N).data;
+    let lo = N, hi = -1;
+    for (let x = 0; x < N; x++) for (let y = 0; y < N; y++) if (a[(y * N + x) * 4 + 3] > 40) { if (x < lo) lo = x; if (x > hi) hi = x; break; }
+    if (hi >= lo) b = { x0: lo / N, x1: (hi + 1) / N };
+  }
+  boundsCache.set(id, b);
+  return b;
+}
+
 // SVG markup for an icon (used by the SVG exporter).
 export function iconSVG(id, x, y, side, ink, paper, customSrc) {
   if (id && id.startsWith('img-')) {

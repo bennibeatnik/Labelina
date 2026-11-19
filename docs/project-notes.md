@@ -26,6 +26,18 @@ Last updated: 2026-11-19
 - Defaults changed: tape edge 0 (was 0.2). Padding stays 1.5 mm unless a SLICC preset is chosen.
 - Next: SLICC-specific designs that fit the 29 mm / 59 mm print length (the user asked to "work on designs that fit best").
 
+## Printing stall (2026-11-19)
+- The user reported the D610BT showing "Printing… please wait" and printing each label only when the *next* job arrived (so it seemed to print the previous label).
+- Probable cause: Labelina sent `ESC i A 01`, which Brother's reference marks as not supported on the PT-P710BT. Removed (cut-each is the default). Also fixed n9 in ESC i z (0 first page, 1 others; it used to send 2 for the last page), and made serial writes chunked and safe against partial resends.
+- **Not yet confirmed on the printer.** Over Bluetooth the app now waits for the "printing completed" status and logs the result, so a stall shows in the log. If it still stalls, suspects are HD (bit 6) on the D610BT and the USB spooler route; ask which connection was used.
+
+## Layout engine (2026-11-19)
+- The user's feedback: big gaps between icons, white space before the first icon, a huge QR with no gap, and they want more information on tall tapes and a QR size per tape.
+- Icons are measured for their ink width (`iconInkBounds` in icons.js) and placed by that width. Separate `gapMm` (between groups) and `iconGapMm` (between the icons).
+- Code: `codeScales[mediaId]` (size per tape), `qrQuiet` (0/1/2/4 modules), `codePos` left/right/below.
+- Fixed lengths shrink icons and code (factor f) until the text has about 40% of the length, and never let them run past the label (the self-test asserts no overlap).
+- Up to 5 text lines (`lineCount` setting; `lines` arrays now hold 5).
+
 ## Origin and goal
 - Started as: "can I hack my Brother PT-D610BT to make perfect Gridfinity labels on the machine?"
 - Decision: **no custom firmware.** There's no public work on P-touch firmware, it risks bricking the printer, and new firmware wouldn't change the hardware limits (leader tape, no half-cut). Drive the printer from outside instead.
