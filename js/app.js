@@ -468,8 +468,87 @@ function libVals() {
   const cat = libCategory();
   if (!libValues[cat.id]) libValues[cat.id] = defaultsFor(cat);
   const v = libValues[cat.id];
+  if (!Array.isArray(v.tpl)) migrateLibValues(cat, v);
   for (const f of [...cat.fields, ...COMMON_FIELDS]) if (!(f.id in v)) v[f.id] = Array.isArray(f.def) ? [...f.def] : f.def;
   return v;
+}
+// Older versions chose content with "Details on the label" (show), "Standard shown: None" and
+// "Put specs on a third line" (three). Turn those choices into line templates once.
+function migrateLibValues(cat, v) {
+  let tpl = [...cat.tpl];
+  const drop = new Set();
+  if (Array.isArray(v.show)) {
+    const optional = ['type', 'drive', 'material', 'standard', 'pitch', 'key', 'dims', 'power', 'tol', 'pkg', 'bands', 'smd', 'volt', 'diel', 'code'];
+    for (const t of optional) if (!v.show.includes(t)) drop.add(t);
+    // pitch/smd were opt-in extras: add them to the specs line if they were switched on
+    if (v.show.includes('pitch') && cat.tokens.some(t => t[0] === 'pitch') && !tpl.join(' ').includes('{pitch}')) tpl[2] = tpl[2] ? `${tpl[2]} · {pitch}` : '{pitch}';
+    if (v.show.includes('smd') && cat.id === 'resistors') tpl[2] = tpl[2] ? `${tpl[2]} · {smd}` : '{smd}';
+  }
+  if (v.std === 'none') { drop.add('standard'); v.std = 'iso'; }
+  tpl = tpl.map(line => fillTemplateDrop(line, drop));
+  if (v.three === false) { tpl = [tpl[0], [tpl[1], tpl[2]].filter(Boolean).join(' · '), '', tpl[3] || '', tpl[4] || '']; }
+  v.tpl = tpl;
+  delete v.show; delete v.three;
+}
+// Removes {token} pieces (and their separators) from a template line.
+function fillTemplateDrop(line, drop) {
+  return line.split(/\s*·\s*/).filter(seg => !(/^\{(\w+)\}$/.test(seg.trim()) && drop.has(seg.trim().slice(1, -1)))).join(' · ');
+}
+// "Label lines" editor: one template per line. Item buttons insert {token} into the line that
+// was clicked last; anything else typed is printed as is.
+let tplFocus = 1;
+function lineTemplateEditor(cat, v) {
+  const wrap = document.createElement('div'); wrap.className = 'lines-editor';
+  const head = document.createElement('div'); head.className = 'lines-head';
+  head.innerHTML = '<label>Label lines</label>';
+  const reset = document.createElement('button'); reset.type = 'button'; reset.textContent = 'Reset';
+  reset.title = 'Back to this category\'s standard lines';
+  reset.addEventListener('click', () => { v.tpl = [...cat.tpl]; renderLibForm(); });
+  head.appendChild(reset);
+  // Example values from the first part, so each button shows what it will print.
+  let sample = {};
+  try { sample = (cat.build(v)[0] || {}).parts || {}; } catch { /* no parts selected */ }
+  const bar = document.createElement('div'); bar.className = 'token-bar';
+  const inputs = [];
+  for (const [id, label] of cat.tokens) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'chip token';
+    b.innerHTML = `<b></b><span></span>`;
+    b.querySelector('b').textContent = label;
+    b.querySelector('span').textContent = sample[id] ? sample[id] : '(empty for this part)';
+    b.title = `Adds {${id}} to line ${tplFocus + 1}`;
+    b.addEventListener('mousedown', e => e.preventDefault()); // keep the caret in the line input
+    b.addEventListener('click', () => {
+      const inp = inputs[tplFocus];
+      const tok = `{${id}}`;
+      const s = inp.value, a = inp.selectionStart ?? s.length, z = inp.selectionEnd ?? s.length;
+      const before = s.slice(0, a), after = s.slice(z);
+      const sepBefore = before.trim() && !/[·\s]$/.test(before) ? ' · ' : before.trim() && !/·\s*$/.test(before) ? '· ' : '';
+      const sepAfter = after.trim() && !/^\s*·/.test(after) ? ' · ' : '';
+      inp.value = before + sepBefore + tok + sepAfter + after;
+      const caret = (before + sepBefore + tok).length;
+      inp.focus(); inp.setSelectionRange(caret, caret);
+      inp.dispatchEvent(new Event('input'));
+    });
+    bar.appendChild(b);
+  }
+  const rows = document.createElement('div'); rows.className = 'line-tpls';
+  for (let i = 0; i < 5; i++) {
+    const lab = document.createElement('label'); lab.className = 'line-tpl';
+    const span = document.createElement('span'); span.textContent = `Line ${i + 1}`;
+    const inp = document.createElement('input'); inp.type = 'text'; inp.value = (v.tpl || [])[i] || '';
+    inp.id = `lib-${cat.id}-tpl-${i}`; inp.placeholder = i === 0 ? 'e.g. {size}' : '(empty)';
+    inp.setAttribute('aria-label', `Line ${i + 1} contents`);
+    inp.addEventListener('focus', () => { tplFocus = i; rows.querySelectorAll('.line-tpl').forEach((r, j) => r.classList.toggle('focus', j === i)); bar.querySelectorAll('.token').forEach(b => { b.title = b.title.replace(/line \d/, `line ${i + 1}`); }); });
+    inp.addEventListener('input', () => { v.tpl = inputs.map(x => x.value); updateLibPreview(); });
+    if (i === tplFocus) lab.classList.add('focus');
+    inputs.push(inp);
+    lab.append(span, inp);
+    rows.appendChild(lab);
+  }
+  const hint = document.createElement('p'); hint.className = 'hint';
+  hint.textContent = 'Click a line, then click items to add them. Type anything else to print it as written, e.g. "Bin 14". Items that are empty for a part are left out. Lines 4 and 5 print when Design → Text lines is 4 or 5 (it goes up automatically when you add labels that use them).';
+  wrap.append(head, bar, rows, hint);
+  return wrap;
 }
 const resolveOpts = (f, v) => (typeof f.options === 'function' ? f.options(v) : f.options || []);
 
@@ -478,9 +557,13 @@ function renderLibForm() {
   const v = libVals();
   const form = $('libForm');
   form.innerHTML = '';
-  for (const f of [...cat.fields, ...COMMON_FIELDS]) {
+  // The line editor goes first: what each line says is the main thing to set here.
+  const fields = [...cat.fields, ...COMMON_FIELDS];
+  fields.sort((a, b) => (b.type === 'lines') - (a.type === 'lines'));
+  for (const f of fields) {
     if (f.show && !f.show(v)) continue;
     const fid = `lib-${cat.id}-${f.id}`;
+    if (f.type === 'lines') { form.appendChild(lineTemplateEditor(cat, v)); continue; }
     if (f.type === 'chips') {
       const opts = resolveOpts(f, v);
       const wrap = document.createElement('div'); wrap.className = 'chips-field';
@@ -568,7 +651,7 @@ function libBuild() {
   });
 }
 // Library fields that only change what's written, not which parts are listed.
-const DISPLAY_FIELDS = ['show', 'std', 'fmt', 'driveIcon', 'three'];
+const DISPLAY_FIELDS = ['tpl', 'std', 'fmt', 'driveIcon'];
 function libLabelsInList() { const id = libCategory().id; return labels.filter(l => l.src && l.src.cat === id); }
 function libUpdateExisting() {
   const cat = libCategory(), cur = libVals();
@@ -583,14 +666,22 @@ function libUpdateExisting() {
     for (const l of ls) {
       const it = items[l.src.i];
       if (!it) continue;
-      l.lines = [...[...it.lines, '', '', ''].slice(0, 3), l.lines[3] || '', l.lines[4] || '']; // lines 4–5 are yours
+      l.lines = [...it.lines, '', '', '', '', ''].slice(0, MAX_LINES);
       l.icon = it.icon || ''; l.icon2 = it.icon2 || '';
       l.src = { ...l.src, v };
       n++;
     }
   }
+  const raised = fitLineCount(labels);
   buildTable(); rerender(true);
-  $('libUpdateMsg').textContent = `Updated ${n} label${n === 1 ? '' : 's'}.`;
+  $('libUpdateMsg').textContent = `Updated ${n} label${n === 1 ? '' : 's'}.${raised ? ` Text lines set to ${raised} so every line shows.` : ''}`;
+}
+// If labels use lines beyond the Text lines setting, raise it so nothing is silently hidden.
+function fitLineCount(list) {
+  let need = 0;
+  for (const l of list) for (let i = MAX_LINES - 1; i >= 0; i--) if ((l.lines[i] || '').trim()) { need = Math.max(need, i + 1); break; }
+  if (need > (+S.lineCount || 3)) { S.lineCount = need; syncControls(); return need; }
+  return 0;
 }
 function updateLibPreview() {
   const items = libBuild();
@@ -600,7 +691,7 @@ function updateLibPreview() {
   items.slice(0, 40).forEach(it => {
     const li = document.createElement('li');
     const b = document.createElement('b'); b.textContent = it.lines[0];
-    const s = document.createElement('span'); s.textContent = [it.lines[1], it.lines[2]].filter(Boolean).join(' / ');
+    const s = document.createElement('span'); s.textContent = it.lines.slice(1).filter(Boolean).join(' / ');
     li.append(b, s); ul.appendChild(li);
   });
   if (items.length > 40) { const li = document.createElement('li'); li.innerHTML = `<span>and ${items.length - 40} more</span>`; ul.appendChild(li); }
@@ -615,6 +706,7 @@ function updateLibPreview() {
 function addLabels(items, replace) {
   const fresh = items.map(mkLabel);
   if (replace) labels = fresh; else labels.push(...fresh);
+  fitLineCount(fresh);
   if (fresh.length) selId = fresh[0].id;
   buildTable();
   rerender(true);
