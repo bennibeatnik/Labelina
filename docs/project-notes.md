@@ -39,6 +39,9 @@ Last updated: 2026-11-19
 - Setting the label length through the driver (DEVMODE + its private block) didn't work reliably, so printing through the driver (GDI) was dropped. Capturing to a file still goes through Brother's queue and status monitor; avoid doing it on the user's PC without asking.
 - The Windows-queue entry was removed from the printer list (raw jobs hung there, "Printing, Retained", 0 bytes).
 
+## ⚠ OPEN ISSUE — printing doesn't finish (see docs/OPEN-ISSUE-printing.md)
+- As of 2026-11-19 end of day: the D610BT pre-cuts and prints Labelina's label but never does the final feed and cut; it stays on "Printing… please wait". Still broken even with byte-identical job data. **Fix first next session.** The owner asked for this to be recorded after a full day and ~$100 spent.
+
 ## Jobs are now byte-identical to Brother's driver (2026-11-19, late night)
 - Removing the status polling did NOT fix the missing final cut. The remaining differences from the driver's output were: an extra `ESC @`, ending with `1A` instead of the driver's `FF`, and a missing `ESC i U` (15 bytes, constant except byte 12, which is a job number counting up per job).
 - All three now follow the driver. `node tests/brother-match.mjs` rebuilds each captured label (tests/brother-driver/*.prn) and checks Labelina's job against Brother's byte for byte: identical for 12 mm SD, 12 mm HD and 24 mm.
