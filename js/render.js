@@ -152,10 +152,14 @@ export function layout(lbl, env, fontPx) {
     }
     const textH = belowH ? ih - belowH - gap : ih;
     const icons = [];
+    // The icon's drawing (not its 24 × 24 box) is scaled to the target height, so at 100% it
+    // reaches the edges of the print area. Very wide drawings are capped at 1.6 × that height.
     const addIcon = (id, scale) => {
-      const side = Math.max(4, Math.round(textH * scale * f));
       const b = iconInkBounds(id, env.customImages);
-      icons.push({ id, side, off: Math.round(b.x0 * side), w: Math.max(1, Math.round((b.x1 - b.x0) * side)) });
+      const target = Math.max(4, Math.round(textH * scale * f));
+      const side = Math.max(4, Math.round(Math.min(target / Math.max(0.05, b.y1 - b.y0), target * 1.6 / Math.max(0.05, b.x1 - b.x0))));
+      const inkH = Math.round((b.y1 - b.y0) * side);
+      icons.push({ id, side, off: Math.round(b.x0 * side), offY: Math.round(b.y0 * side), inkH, w: Math.max(1, Math.round((b.x1 - b.x0) * side)) });
     };
     if (style.showIcon !== false && lbl.icon && (ICON_MAP[lbl.icon] || lbl.icon.startsWith('img-'))) addIcon(lbl.icon, +style.iconScale || 1);
     if (style.showIcon2 !== false && lbl.icon2 && (ICON_MAP[lbl.icon2] || lbl.icon2.startsWith('img-'))) addIcon(lbl.icon2, +(style.iconScale2 ?? 0.65) || 0.65);
@@ -165,11 +169,14 @@ export function layout(lbl, env, fontPx) {
 
   // Text
   const lines = textLines(lbl, style);
-  const fam = style.font, w1 = +style.w1 || 700, w2 = +style.w2 || 400, r = +style.ratio || 0.7;
+  const fam = style.font, w1 = +style.w1 || 700, w2 = +style.w2 || 400;
+  // Size of lines 2+ relative to line 1: the slider in auto mode, or the two point sizes in fixed mode.
+  const r = style.sizeMode === 'fixed' ? (+style.pt2 || 10) / (+style.pt || 14) : (+style.ratio || 0.7);
   const m = fontMetrics(fam, w1);
   const n = lines.length;
   const heightUnits = n ? (m.a + m.d) * (1 + r * (n - 1)) + 0.12 * (n - 1) : 1;
-  const unitWidths = lines.map((s, i) => textWidth(s, fam, i ? w2 : w1) * (i ? r : 1));
+  const rawWidths = lines.map((s, i) => textWidth(s, fam, i ? w2 : w1)); // width per px of font size
+  const unitWidths = rawWidths.map((w, i) => w * (i ? r : 1));
   const maxUnitW = Math.max(0, ...unitWidths);
 
   // Width taken by everything except the text, including the gaps around the text.
@@ -203,7 +210,7 @@ export function layout(lbl, env, fontPx) {
   if (!codeBox) code = null;
   const fH = n ? textH / heightUnits : 0;
 
-  let textW, autoF;
+  let textW, autoF, caps = null;
   if (W == null) {
     autoF = fH;
     const f = fontPx != null ? fontPx : (style.sizeMode === 'fixed' ? Math.min(fH, (+style.pt || 12) * dpi / 72) : fH);
@@ -215,8 +222,14 @@ export function layout(lbl, env, fontPx) {
   } else {
     textW = W - 2 * pad - sideW(B);
     if (textW < Math.round(3 * k) && n) errors.push('Not enough room for the text');
-    const fW = maxUnitW > 0 ? Math.max(0, textW) / maxUnitW : Infinity;
-    autoF = Math.min(fH, fW);
+    // Each line is limited by the width on its own, so one long line doesn't shrink the others.
+    caps = rawWidths.map(w => (w > 0 ? Math.max(0, textW) / w : Infinity));
+    // Largest line-1 size whose whole block still fits the height.
+    const g = { lines, r, caps };
+    const blockH = f => { const s = lineSizes(g, f); return s.reduce((a, b) => a + b, 0) * (m.a + m.d) + 0.12 * s[0] * (n - 1); };
+    let lo = 0, hi = n ? textH / (m.a + m.d) : 0;
+    for (let i = 0; i < 24; i++) { const mid = (lo + hi) / 2; if (blockH(mid) <= textH) lo = mid; else hi = mid; }
+    autoF = lo;
   }
 
   // Place
@@ -226,7 +239,7 @@ export function layout(lbl, env, fontPx) {
     x += codeW + gap;
   }
   const iconBoxes = icons.map((ic, i) => {
-    const b = { id: ic.id, x: x - ic.off, y: iy + Math.floor((textH - ic.side) / 2), side: ic.side };
+    const b = { id: ic.id, x: x - ic.off, y: iy + Math.floor((textH - ic.inkH) / 2) - ic.offY, side: ic.side };
     x += ic.w + (i < icons.length - 1 ? iconGap : gap);
     return b;
   });
@@ -235,7 +248,20 @@ export function layout(lbl, env, fontPx) {
     if (codeBox.below) codeBox.x = Math.round((W - codeBox.w) / 2);
     else if (codePos !== 'left') codeBox.x = codeBox.kind === 'qr' ? W - pad - codeBox.side : W - pad - codeBox.quiet - codeBox.w;
   }
-  return { W, H, dpi, k, ySub, lines, unitWidths, metrics: m, iconBoxes, textBox, codeBox, code, autoF, errors, fam, w1, w2, r, fontPx };
+  return { W, H, dpi, k, ySub, lines, unitWidths, caps, metrics: m, iconBoxes, textBox, codeBox, code, autoF, errors, fam, w1, w2, r, fontPx };
+}
+
+// Font size of each line for line-1 size f: lines 2+ are f × r, every line is capped by the
+// width available (caps), and smaller-than-line-1 lines never outgrow line 1.
+export function lineSizes(geo, f) {
+  const caps = geo.caps || [];
+  const s1 = Math.min(f, caps[0] ?? Infinity);
+  return geo.lines.map((_, i) => {
+    if (!i) return s1;
+    let s = Math.min(f * geo.r, caps[i] ?? Infinity);
+    if (geo.r <= 1) s = Math.min(s, s1);
+    return s;
+  });
 }
 
 // Build drawable primitives from a geometry at primary font size f.
@@ -245,9 +271,12 @@ export function scene(geo, f, style) {
   for (const b of geo.iconBoxes) items.push({ k: 'icon', id: b.id, x: b.x, y: b.y, s: b.side });
   const { lines, metrics: m, textBox: tb } = geo;
   if (lines.length && f > 0) {
-    if (style.sizeMode === 'fixed' && f + 0.01 < (+style.pt || 12) * geo.dpi / 72) errors.push('Text was shrunk to fit');
-    const sizes = lines.map((_, i) => (i ? f * geo.r : f));
-    const gapPx = f * 0.12;
+    const sizes = lineSizes(geo, f);
+    if (style.sizeMode === 'fixed') {
+      const want = [(+style.pt || 12), (+style.pt2 || 10)].map(p => p * geo.dpi / 72);
+      if (sizes.some((s, i) => s + 0.01 < want[i ? 1 : 0])) errors.push('Text was shrunk to fit');
+    }
+    const gapPx = sizes[0] * 0.12;
     const desc = lines.map((s, i) => (DESC.test(s) ? m.d : m.d * 0.3) * sizes[i]);
     const block = sizes.reduce((s, sz, i) => s + sz * m.a + desc[i], 0) + gapPx * (lines.length - 1);
     let y = tb.y + (tb.h - block) / 2;

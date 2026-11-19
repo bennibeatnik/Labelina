@@ -17,7 +17,7 @@ const DEFAULTS = {
   align: 'left', codePos: 'right', iconScale: 1, iconScale2: 0.65, iconGapMm: 0.5, padMm: 1.5, gapMm: 1, edgeMm: 0, border: 'none', invert: false,
   codeScale: 1, codeScales: {}, qrQuiet: 1, lineCount: 3,
   showIcon: true, showIcon2: true, showCode: true,
-  font: 'Roboto Condensed', w1: '700', w2: '400', sizeMode: 'auto', pt: 14, ratio: 0.66, match: true, upper: false,
+  font: 'Roboto Condensed', w1: '700', w2: '400', sizeMode: 'auto', pt: 14, pt2: 9, ratio: 0.66, match: true, upper: false,
   zoom: 'fit', outMode: 'pages', cutMode: 'each', marginMm: 2, flip: false, mirror: false, sheetPage: 'a4', skipSlots: 0,
 };
 
@@ -619,7 +619,8 @@ function updateDesignVisibility() {
   $('unitHint').textContent = `1 unit = ${(p - ins).toFixed(1)} mm · 2 = ${(2 * p - ins).toFixed(1)} mm · 3 = ${(3 * p - ins).toFixed(1)} mm. Set each label's units in the list.`;
   $('fTapeColor').hidden = m.kind !== 'tape';
   $('fEdge').hidden = m.kind !== 'tape';
-  $('fPt').hidden = S.sizeMode !== 'fixed';
+  $('fPt').hidden = $('ptHint').hidden = S.sizeMode !== 'fixed';
+  $('fRatio').hidden = S.sizeMode === 'fixed';
   $('iconScaleOut').textContent = Math.round(S.iconScale * 100) + '%';
   $('iconScale2Out').textContent = Math.round((S.iconScale2 ?? 0.66) * 100) + '%';
   const cs = codeScaleFor(S.media);
@@ -822,7 +823,7 @@ let busy = false;
 async function readTape(quiet) {
   if (!conn) { log('Connect a printer first.', 'err'); return; }
   if (conn.canRead === false) {
-    if (!quiet) log('Printing over USB goes through Windows, which can\'t report the tape. Pick the tape size under Design, or connect over Bluetooth to read it.');
+    if (!quiet) log('The Windows print queue can\'t report the tape. Pick the tape size under Design, or connect the USB or Bluetooth entry to read it.');
     return;
   }
   if (busy) return;
@@ -833,9 +834,10 @@ async function readTape(quiet) {
     if (!st) { if (!quiet) log('The printer did not answer the status request.', 'err'); return; }
     log(`Tape: ${st.widthMm} mm ${st.mediaType.toLowerCase()}, ${st.textColor.toLowerCase()} on ${st.tapeColor.toLowerCase()}.`);
     st.errors.forEach(e => log(e, 'err'));
-    // Only switch for TZe tape; tube widths aren't reported in a documented way.
+    // Switch for any TZe tape (laminated, non-laminated, fabric, flexible ID, satin…); tube
+    // widths (HS 2:1 = 0x11, 3:1 = 0x17) aren't reported in a documented way.
     const id = `tze-${st.widthMm}`;
-    const isTape = st.mediaTypeCode === 0x01 || st.mediaTypeCode === 0x03;
+    const isTape = st.mediaTypeCode && ![0x00, 0x11, 0x17, 0xff].includes(st.mediaTypeCode);
     if (isTape && MEDIA_MAP[id] && S.media !== id) { S.media = id; log(`Switched media to ${st.widthMm} mm tape.`, 'ok'); }
     const col = TAPE_COLORS.find(c => c.code === st.tapeColorCode && c.text === st.textColorCode);
     if (col) S.tapeColor = col.id;
@@ -899,7 +901,7 @@ async function print(which) {
     const job = makeJob(bitmaps);
     log(`Sending ${bitmaps.length} label${bitmaps.length === 1 ? '' : 's'} (${(job.length / 1024).toFixed(1)} KB)…`);
     await conn.write(job);
-    if (conn.canRead === false) log('Sent to the printer through Windows.', 'ok');
+    if (conn.canRead === false) log('Sent to the Windows print queue. If it doesn\'t print, use the plain USB entry instead.', 'ok');
     else await awaitPrinted(S.outMode === 'strip' && bitmaps.length > 1 ? 1 : bitmaps.length);
   } catch (e) { connErr(e, 'the printer'); }
   finally { busy = false; ['printSel', 'printAll', 'printTest'].forEach(id => { $(id).disabled = false; }); }

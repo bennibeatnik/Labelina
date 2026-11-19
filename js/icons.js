@@ -215,28 +215,31 @@ export function paintIcon(ctx, id, x, y, side, ink, paper, customImages) {
   ctx.restore();
 }
 
-// Horizontal ink extent of an icon as fractions of its square box: { x0, x1 }.
-// Layout uses it so a narrow icon (a screw seen from the side) takes only the room it needs.
+// Ink extent of an icon as fractions of its square box: { x0, x1, y0, y1 }.
+// Layout uses it so an icon takes only the room its drawing needs and can fill the height.
 const boundsCache = new Map();
+const FULL = { x0: 0, x1: 1, y0: 0, y1: 1 };
 export function iconInkBounds(id, customImages) {
   const img = id && id.startsWith('img-') ? customImages && customImages.get(id) : null;
   if (id && id.startsWith('img-')) {
-    if (!img || !img.complete || !img.naturalWidth) return { x0: 0, x1: 1 };
-    const w = Math.min(1, img.naturalWidth / img.naturalHeight); // drawn "contain", centred
-    return { x0: (1 - w) / 2, x1: (1 + w) / 2 };
+    if (!img || !img.complete || !img.naturalWidth) return FULL;
+    const w = Math.min(1, img.naturalWidth / img.naturalHeight), h = Math.min(1, img.naturalHeight / img.naturalWidth); // drawn "contain", centred
+    return { x0: (1 - w) / 2, x1: (1 + w) / 2, y0: (1 - h) / 2, y1: (1 + h) / 2 };
   }
   let b = boundsCache.get(id);
   if (b) return b;
-  b = { x0: 0, x1: 1 };
+  b = FULL;
   if (ICON_MAP[id] && typeof document !== 'undefined') {
     const N = 96;
     const c = document.createElement('canvas'); c.width = c.height = N;
     const ctx = c.getContext('2d', { willReadFrequently: true });
     paintIcon(ctx, id, 0, 0, N, '#000', 'rgba(0,0,0,0)');
     const a = ctx.getImageData(0, 0, N, N).data;
-    let lo = N, hi = -1;
-    for (let x = 0; x < N; x++) for (let y = 0; y < N; y++) if (a[(y * N + x) * 4 + 3] > 40) { if (x < lo) lo = x; if (x > hi) hi = x; break; }
-    if (hi >= lo) b = { x0: lo / N, x1: (hi + 1) / N };
+    let x0 = N, x1 = -1, y0 = N, y1 = -1;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      if (a[(y * N + x) * 4 + 3] > 40) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+    if (x1 >= x0) b = { x0: x0 / N, x1: (x1 + 1) / N, y0: y0 / N, y1: (y1 + 1) / N };
   }
   boundsCache.set(id, b);
   return b;

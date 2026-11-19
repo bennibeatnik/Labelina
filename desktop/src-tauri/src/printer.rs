@@ -1,12 +1,13 @@
 //! Printer transports for the desktop app.
 //!
 //! The web page builds the Brother raster job (js/ptouch.js) exactly as it does in the
-//! browser; this module only moves the bytes. Two routes:
+//! browser; this module only moves the bytes. Routes:
 //!
-//! * `usb`: a Windows printer queue that uses Brother's own driver. The job is sent with
-//!   the RAW datatype, so the driver passes the raster commands through untouched. No
-//!   WinUSB/Zadig swap is needed and P-touch Editor keeps working. The spooler is
-//!   write-only, so the tape can't be read on this route.
+//! * `usb`: the printer's USB printer-class interface (usbprint.sys, `\\?\USB#VID_04F9…`)
+//!   opened directly. Two-way (status, tape detection, print confirmation), no print queue,
+//!   and no driver swap: Brother's driver and P-touch Editor keep working.
+//! * `spooler`: fallback through the Windows print queue with the RAW datatype. Write-only,
+//!   and on the D610BT jobs were seen to hang in the queue ("Printing, Retained", 0 bytes).
 //! * `bluetooth` / `serial`: a COM port (Bluetooth SPP shows up as one once the printer
 //!   is paired). The port is held open between prints, and a failed write reopens the
 //!   port and tries once more, which covers the printer having slept or been switched off.
@@ -42,6 +43,10 @@ pub struct Target {
 enum Link {
     Spooler { name: String },
     Serial { path: String, port: Box<dyn serialport::SerialPort> },
+    /// The printer's USB printer-class interface opened directly (usbprint.sys), bypassing
+    /// the print queue. Two-way, so status works, and Brother's driver stays installed.
+    #[cfg(windows)]
+    UsbDirect { path: String, file: std::fs::File },
 }
 
 #[derive(Default)]
@@ -53,8 +58,9 @@ pub fn list() -> Vec<PrinterInfo> {
     let mut out = Vec::new();
     #[cfg(windows)]
     {
-        out.extend(win::spooler_printers());
+        out.extend(win::usb_direct_printers());
         out.extend(win::bluetooth_ports());
+        out.extend(win::spooler_printers());
     }
     #[cfg(not(windows))]
     {
@@ -87,7 +93,9 @@ fn open_serial(path: &str) -> Result<Box<dyn serialport::SerialPort>, String> {
 impl PrinterState {
     pub fn connect(&self, t: &Target) -> Result<(), String> {
         let link = match t.kind.as_str() {
-            "usb" => {
+            #[cfg(windows)]
+            "usb" => Link::UsbDirect { path: t.address.clone(), file: win::open_usb(&t.address)? },
+            "spooler" => {
                 #[cfg(windows)]
                 win::check_printer(&t.address)?;
                 #[cfg(not(windows))]
@@ -118,6 +126,35 @@ impl PrinterState {
                 return win::raw_print(name, data);
                 #[cfg(not(windows))]
                 return Err(format!("Can't print to {name} on this system."));
+            }
+            #[cfg(windows)]
+            Some(Link::UsbDirect { path, file }) => {
+                let attempt = |f: &mut std::fs::File| -> Result<(), (usize, std::io::Error)> {
+                    // Drop status bytes left from earlier jobs so the next read is about this one.
+                    let mut junk = [0u8; 64];
+                    for _ in 0..16 {
+                        if !matches!(f.read(&mut junk), Ok(k) if k > 0) { break; }
+                    }
+                    let mut sent = 0usize;
+                    for chunk in data.chunks(16_384) {
+                        f.write_all(chunk).map_err(|e| (sent, e))?;
+                        sent += chunk.len();
+                    }
+                    f.flush().map_err(|e| (sent, e))
+                };
+                match attempt(file) {
+                    Ok(()) => Ok(()),
+                    // Nothing went out: the printer was probably replugged or power-cycled.
+                    Err((0, _)) => {
+                        *file = win::open_usb(path)?;
+                        attempt(file).map_err(|(_, e)| format!("Sending over USB failed: {e}"))
+                    }
+                    Err((sent, e)) => Err(format!(
+                        "Only {} of {} KB reached the printer before USB failed ({e}). Switch the printer off and on before printing again.",
+                        sent / 1024,
+                        data.len().div_ceil(1024)
+                    )),
+                }
             }
             Some(Link::Serial { path, port }) => {
                 // Sends in chunks so a slow Bluetooth link can't hit one long timeout, and reports
@@ -156,8 +193,23 @@ impl PrinterState {
     /// route can't read (the Windows print queue).
     pub fn read(&self, n: usize, ms: u64) -> Result<Option<Vec<u8>>, String> {
         let mut g = self.0.lock().map_err(|_| "Printer state is unavailable.")?;
-        let Some(Link::Serial { port, .. }) = g.as_mut() else { return Ok(None) };
         let deadline = Instant::now() + Duration::from_millis(ms);
+        // usbprint returns 0 bytes straight away when the printer has nothing to say, so poll.
+        #[cfg(windows)]
+        if let Some(Link::UsbDirect { file, .. }) = g.as_mut() {
+            let mut buf = Vec::with_capacity(n);
+            let mut chunk = [0u8; 64];
+            while buf.len() < n && Instant::now() < deadline {
+                match file.read(&mut chunk) {
+                    Ok(0) => std::thread::sleep(Duration::from_millis(60)),
+                    Ok(k) => buf.extend_from_slice(&chunk[..k]),
+                    Err(_) => break,
+                }
+            }
+            buf.truncate(n);
+            return Ok(if buf.is_empty() { None } else { Some(buf) });
+        }
+        let Some(Link::Serial { port, .. }) = g.as_mut() else { return Ok(None) };
         let mut buf = Vec::with_capacity(n);
         let mut chunk = [0u8; 64];
         while buf.len() < n {
@@ -188,6 +240,22 @@ mod tests {
     fn list_printers() {
         for p in super::list() {
             println!("{:<10} {:<28} {:<24} {}", p.kind, p.name, p.detail, p.address);
+        }
+    }
+
+    /// Asks each direct-USB printer for its status (ESC i S). Prints nothing on the tape.
+    #[test]
+    #[ignore]
+    fn usb_status() {
+        let mut req = vec![0u8; 100];
+        req.extend_from_slice(&[0x1b, 0x40, 0x1b, 0x69, 0x53]);
+        for p in super::list().into_iter().filter(|p| p.kind == "usb") {
+            let s = super::PrinterState::default();
+            s.connect(&super::Target { kind: p.kind.clone(), address: p.address.clone() }).unwrap();
+            s.write(&req).unwrap();
+            let r = s.read(32, 3000).unwrap().unwrap_or_default();
+            println!("{}: {} bytes, width {} mm, media type 0x{:02x}, errors {:02x} {:02x}", p.name, r.len(), r.get(10).copied().unwrap_or(0), r.get(11).copied().unwrap_or(0), r.get(8).copied().unwrap_or(0), r.get(9).copied().unwrap_or(0));
+            assert_eq!(r.len(), 32);
         }
     }
 }
@@ -256,14 +324,60 @@ mod win {
                 let offline = pi.Attributes & PRINTER_ATTRIBUTE_WORK_OFFLINE != 0;
                 let how = if port.to_uppercase().starts_with("USB") { "USB".to_string() } else { port.clone() };
                 out.push(PrinterInfo {
-                    kind: "usb".into(),
+                    kind: "spooler".into(),
                     address: name.clone(),
-                    detail: if offline { format!("{how} · offline") } else { how },
+                    detail: if offline { format!("{how} via Windows print queue · offline") } else { format!("{how} via Windows print queue") },
                     name,
                 });
             }
         }
         out
+    }
+
+    const USBPRINT_GUID: &str = "{28d78fad-5a12-11d1-ae5b-0000f803a8c2}";
+    const BROTHER_VID: &str = "VID_04F9";
+
+    /// Brother printers currently plugged in over USB, found through the USB printer class
+    /// interface. Opening that interface needs no driver change (usbprint.sys is Windows' own).
+    pub fn usb_direct_printers() -> Vec<PrinterInfo> {
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        let mut out = Vec::new();
+        let Ok(cls) = hklm.open_subkey(format!(r"SYSTEM\CurrentControlSet\Control\DeviceClasses\{USBPRINT_GUID}")) else { return out };
+        for link in cls.enum_keys().flatten() {
+            // e.g. ##?#USB#VID_04F9&PID_20E1#000K4H471200#{28d78fad-...}
+            if !link.to_uppercase().contains(BROTHER_VID) {
+                continue;
+            }
+            // The registry keeps entries for unplugged printers too; only list ones that open.
+            let path = format!(r"\\?\{}", link.trim_start_matches("##?#"));
+            if open_usb(&path).is_err() {
+                continue;
+            }
+            let parts: Vec<&str> = link.trim_start_matches("##?#").split('#').collect();
+            let name = if parts.len() >= 3 {
+                hklm.open_subkey(format!(r"SYSTEM\CurrentControlSet\Enum\{}\{}\{}", parts[0], parts[1], parts[2]))
+                    .ok()
+                    .and_then(|k| k.get_value::<String, _>("FriendlyName").or_else(|_| k.get_value::<String, _>("DeviceDesc")).ok())
+                    .map(|s| s.rsplit(';').next().unwrap_or(&s).to_string()) // DeviceDesc can be "@oem.inf,...;Name"
+                    .unwrap_or_else(|| "Brother USB printer".into())
+            } else {
+                "Brother USB printer".into()
+            };
+            out.push(PrinterInfo { kind: "usb".into(), address: path, name, detail: "USB".into() });
+        }
+        out
+    }
+
+    /// Opens the USB printer interface for reading and writing, shared so the print queue
+    /// and P-touch Editor can still use the printer.
+    pub fn open_usb(path: &str) -> Result<std::fs::File, String> {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0x1 | 0x2) // FILE_SHARE_READ | FILE_SHARE_WRITE
+            .open(path)
+            .map_err(|e| format!("Couldn't open the printer over USB. Is it plugged in and switched on? ({e})"))
     }
 
     /// Checks that Windows knows the printer before we call ourselves connected.

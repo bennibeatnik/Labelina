@@ -130,10 +130,14 @@
           <label class="field"><span>Other lines</span><select id="w2" data-key="w2"><option value="400">Regular</option><option value="500">Medium</option><option value="600">Semibold</option><option value="700">Bold</option></select></label>
         </div>
         <div class="field-row">
-          <label class="field"><span>Text size</span><select id="sizeMode" data-key="sizeMode"><option value="auto">Fit automatically</option><option value="fixed">Fixed point size</option></select></label>
-          <label class="field" id="fPt"><span>Point size</span><input type="number" id="pt" data-key="pt" min="4" max="96" step="0.5"></label>
+          <label class="field wide"><span>Text size</span><select id="sizeMode" data-key="sizeMode"><option value="auto">Fit automatically</option><option value="fixed">Fixed point sizes</option></select></label>
         </div>
-        <label class="field wide"><span>Lines 2–3 size <output id="ratioOut"></output></span><input type="range" id="ratio" data-key="ratio" min="0.4" max="1" step="0.02"></label>
+        <div class="field-row" id="fPt">
+          <label class="field"><span>Line 1 pt</span><input type="number" id="pt" data-key="pt" min="3" max="96" step="0.5"></label>
+          <label class="field"><span>Other lines pt</span><input type="number" id="pt2" data-key="pt2" min="3" max="96" step="0.5"></label>
+        </div>
+        <p class="hint" id="ptHint" hidden>Text only shrinks below these sizes when a line doesn't fit.</p>
+        <label class="field wide" id="fRatio"><span>Other lines size <output id="ratioOut"></output> of line 1</span><input type="range" id="ratio" data-key="ratio" min="0.3" max="1" step="0.02"></label>
         <div class="checks">
           <label class="check"><input type="checkbox" id="match" data-key="match"> Same text size on every label</label>
           <label class="check"><input type="checkbox" id="upper" data-key="upper"> Uppercase line 1</label>
@@ -242,7 +246,7 @@
         </div>
         <details class="help">
           <summary>Connection help</summary>
-          <p data-native><strong>USB:</strong> install Brother's printer driver and plug the printer in. It appears in the list as a USB printer and prints through Windows; no driver changes are needed. The tape can't be read over USB, so pick the tape size yourself.</p>
+          <p data-native><strong>USB:</strong> plug the printer in and pick the entry that says <em>USB</em>. Labelina talks to the printer directly, so it can read the tape and confirm each print, and Brother's driver and P-touch Editor keep working. The <em>via Windows print queue</em> entry is a fallback; jobs can get stuck in the queue there.</p>
           <p data-native><strong>Bluetooth:</strong> pair the printer in Windows Bluetooth settings first, then press Refresh. Bluetooth can also read which tape is loaded. Labelina reconnects to the last printer automatically.</p>
           <p data-web><strong>Bluetooth:</strong> pair the printer in your system's Bluetooth settings first. On Windows it then appears as a COM port; pick it from the list.</p>
           <p data-web><strong>USB on Windows:</strong> the Brother driver keeps the printer to itself. To use USB from the browser, switch the printer to the WinUSB driver (for example with Zadig). Brother's own software won't see it until you switch back. The Labelina desktop app doesn't have this problem.</p>

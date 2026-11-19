@@ -169,8 +169,9 @@ export async function connectUSB() {
 
 // ------------------------------------------------------------ desktop app (Tauri)
 // In the desktop app the bytes go through Rust (desktop/src-tauri/src/printer.rs):
-// USB prints through the Windows print queue (Brother's driver, RAW data) and
-// Bluetooth holds the COM port open, reopening it if a write fails.
+// 'usb' opens the printer's USB printer-class interface directly (two-way, no print queue),
+// 'bluetooth' holds the COM port open, and 'spooler' is the Windows print queue fallback
+// (write-only). Each route reopens the connection if a write fails before any data went out.
 export const IS_NATIVE = !!(globalThis.__TAURI__ && globalThis.__TAURI__.core);
 const invoke = (cmd, args, opts) => globalThis.__TAURI__.core.invoke(cmd, args, opts);
 
@@ -180,9 +181,9 @@ export function listNativePrinters() { return invoke('printer_list'); }
 export async function connectNative(p) {
   await invoke('printer_connect', { target: { kind: p.kind, address: p.address } });
   return {
-    kind: p.kind === 'usb' ? 'USB' : p.kind === 'bluetooth' ? 'Bluetooth' : 'Serial',
+    kind: { usb: 'USB', bluetooth: 'Bluetooth', spooler: 'Windows queue' }[p.kind] || 'Serial',
     name: p.name, native: true,
-    canRead: p.kind !== 'usb', // the Windows print queue is write-only
+    canRead: p.kind !== 'spooler', // the Windows print queue is write-only
     async write(bytes) { await invoke('printer_write', bytes); },
     async read(n, ms) { const r = await invoke('printer_read', { n, ms }); return r ? new Uint8Array(r) : null; },
     async close() { try { await invoke('printer_close'); } catch { } },
