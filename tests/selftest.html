@@ -16,8 +16,8 @@ try {
   items.push({ lines: ['bad', '', ''], codeType: 'ean13', code: 'abc' });
   const style = { font: 'Arial', w1: 700, w2: 400, ratio: 0.66, padMm: 1.5, gapMm: 1, edgeMm: 0.2, iconScale: 1, lengthMode: 'auto', lengthMm: 40, unitPitch: 42, unitInset: 6, codePos: 'right', align: 'left', showIcon: true, showIcon2: true, sizeMode: 'auto', border: 'round' };
   let n = 0, errs = new Set();
-  for (const media of M.MEDIA) for (const mode of ['auto', 'units', 'fixed']) for (const pos of ['right', 'below']) {
-    const st = { ...style, lengthMode: mode, codePos: pos };
+  for (const media of M.MEDIA) for (const hd of media.hdCapable ? ['', '1'] : ['']) for (const mode of ['auto', 'units', 'fixed']) for (const pos of ['right', 'below']) {
+    const st = { ...style, lengthMode: mode, codePos: pos, hd };
     const env = { media: R.resolveMedia(media, st), style: st, feedMm: 2 };
     for (const it of items) {
       const lbl = { lines: [...it.lines, '', ''].slice(0, 3), icon: it.icon || '', icon2: it.icon2 || '', codeType: it.codeType || 'none', code: it.code || '', len: null };
@@ -36,6 +36,39 @@ try {
   const job = P.buildRasterJob(bms, { media, marginMm: 2, autoCut: true }); out.push('raster job bytes: ' + job.length);
   const strip = P.joinStrip(bms); out.push('strip: ' + strip.W + 'x' + strip.H);
   out.push('zpl chars: ' + X.bitmapToZPL(bms[0]).length);
+
+  // --- HD (180 x 360 dpi): bitmap height = head pins, QR modules whole dots, job flags and margin
+  const hdStyle = { ...style, hd: '1' };
+  const hdMedia = R.resolveMedia(media, hdStyle);
+  if (!(hdMedia.hd && hdMedia.dpi === 360 && hdMedia.ySub === 2)) throw new Error('HD media not resolved');
+  const qrLbl = { lines: ['QR', '', ''], icon: '', icon2: '', codeType: 'qr', code: 'SLICC-42', len: null };
+  const hdEnv = { media: hdMedia, style: hdStyle, feedMm: 2 };
+  const hg = R.layout(qrLbl, hdEnv); const hsc = R.scene(R.layout(qrLbl, hdEnv, hg.autoF), hg.autoF, hdStyle);
+  if (hg.codeBox.mod % 2 || hg.codeBox.y % 2) throw new Error('HD QR modules not on whole printer dots');
+  const hbm = R.toBitmap(R.renderCanvas(hsc, 2), 2, 0.5, hsc.ySub);
+  if (hbm.H !== media.pins) throw new Error('HD bitmap height ' + hbm.H + ' != ' + media.pins + ' pins');
+  if (R.squareBitmap(hbm).H !== media.pins * 2) throw new Error('squareBitmap height wrong');
+  const hjob = P.buildRasterJob([hbm], { media: hdMedia, marginMm: 2, autoCut: true });
+  const find = (job, seq) => { for (let i = 0; i < job.length; i++) if (seq.every((v, j) => job[i + j] === v)) return i; return -1; };
+  if (find(hjob, [0x1b, 0x69, 0x4b, 0x48]) < 0) throw new Error('HD job missing ESC i K 0x48 (high res + no chain)');
+  if (find(hjob, [0x1b, 0x69, 0x64, 28, 0]) < 0) throw new Error('HD job margin is not 28 dots (2 mm at 360 dpi)');
+  const sjob = P.buildRasterJob([bms[0]], { media, marginMm: 1, autoCut: true });
+  if (find(sjob, [0x1b, 0x69, 0x64, 14, 0]) < 0) throw new Error('margin below 2 mm was not raised to 14 dots');
+  const tube = M.MEDIA_MAP['hse-11.7'];
+  const tjob = P.buildRasterJob([{ bits: new Uint8Array(tube.pins * 40), W: 40, H: tube.pins }], { media: tube, marginMm: 2 });
+  if (find(tjob, [0x1b, 0x69, 0x7a, 0x80]) < 0) throw new Error('tube job should skip the width check');
+  out.push('hd: bitmap ' + hbm.W + 'x' + hbm.H + ', qr module ' + hg.codeBox.mod + ', job bytes ' + hjob.length);
+
+  // --- SLICC presets: printed length (raster + 2 margins) must match the preset in both resolutions
+  for (const pre of M.LENGTH_PRESETS.filter(p => p.tight)) for (const hd of ['', '1']) {
+    const st = { ...style, hd, lengthMode: 'fixed', lengthMm: pre.mm, padMm: 0, edgeMm: 0 };
+    const md = R.resolveMedia(media, st); const lineDpi = md.hd ? 360 : 180;
+    const g = R.layout({ lines: ['M3', '', ''], icon: 'gear', codeType: 'none', code: '', len: null }, { media: md, style: st, feedMm: 2 });
+    const marginDots = Math.round(2 * lineDpi / 25.4);
+    const total = (g.W + 2 * marginDots) / lineDpi * 25.4;
+    if (Math.abs(total - pre.mm) > 0.15) throw new Error(`${pre.name} ${hd ? 'HD' : 'SD'} prints ${total.toFixed(2)} mm`);
+    out.push(`${pre.name} ${hd ? 'HD' : 'SD'}: ${total.toFixed(2)} mm`);
+  }
   const png = await X.canvasToPNG(X.bitmapCanvas(bms[0]), 180); const b = new Uint8Array(await png.arrayBuffer());
   out.push('png pHYs at 37: ' + String.fromCharCode(...b.slice(37, 41)) + ' size ' + b.length);
   const svg = R.renderSVG(scs[0], () => null, ''); out.push('svg length ' + svg.length + ' starts ' + svg.slice(0, 38).replace(/\n/g, ' '));

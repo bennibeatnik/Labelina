@@ -23,25 +23,34 @@ function packbits(src) {
   return out;
 }
 
-// pages: array of {bits, W, H}. Each W column becomes one raster line.
-// opts: { media, autoCut, chain, marginMm, flip, mirror }
+// Brother's minimum feed margin is 2 mm: 14 dots at 180 dpi, 28 at 360 dpi (reference 2.3.3).
+export const MIN_MARGIN_MM = 2;
+
+// pages: array of {bits, W, H}. Each W column becomes one raster line. H must equal media.pins.
+// opts: { media, autoCut, chain, marginMm, flip, mirror }. media.hd = high resolution:
+// raster lines (and the margin) are counted at 360 dpi along the tape.
 export function buildRasterJob(pages, opts) {
   const { media } = opts;
+  const lineDpi = media.hd ? 360 : 180;
   const out = [];
   const push = (...b) => { for (const x of b) out.push(x); };
   for (let i = 0; i < 100; i++) out.push(0); // invalidate
   push(0x1b, 0x40); // initialise
   push(0x1b, 0x69, 0x61, 0x01); // raster mode
-  const margin = Math.max(0, Math.round((opts.marginMm ?? 2) * 180 / 25.4));
+  const minMargin = Math.round(MIN_MARGIN_MM * lineDpi / 25.4);
+  const margin = Math.max(minMargin, Math.round((opts.marginMm ?? MIN_MARGIN_MM) * lineDpi / 25.4));
   pages.forEach((pg, idx) => {
     const lines = pg.W;
     const kind = pages.length === 1 ? 0 : idx === 0 ? 0 : idx === pages.length - 1 ? 2 : 1;
-    // Print information: validity flags = recover + width, media width in mm, raster line count
-    push(0x1b, 0x69, 0x7a, 0x84, 0x00, media.widthCode, 0x00,
+    // Print information: validity flags = recover (+ width when the tape has a width code),
+    // media width in mm, raster line count. Tubes have no documented width code, so they skip the check.
+    const flags = media.widthCode ? 0x84 : 0x80;
+    push(0x1b, 0x69, 0x7a, flags, 0x00, media.widthCode || 0, 0x00,
       lines & 0xff, (lines >> 8) & 0xff, (lines >> 16) & 0xff, (lines >> 24) & 0xff, kind, 0x00);
     push(0x1b, 0x69, 0x4d, opts.autoCut ? 0x40 : 0x00); // various mode: auto cut
     if (opts.autoCut) push(0x1b, 0x69, 0x41, 0x01); // cut every label
-    push(0x1b, 0x69, 0x4b, opts.chain ? 0x00 : 0x08); // advanced: 0x08 = feed and cut after the last label
+    // advanced mode: bit 3 = no chain (feed and cut after the last label), bit 6 = high resolution
+    push(0x1b, 0x69, 0x4b, (opts.chain ? 0x00 : 0x08) | (media.hd ? 0x40 : 0x00));
     push(0x1b, 0x69, 0x64, margin & 0xff, (margin >> 8) & 0xff); // feed margin
     push(0x4d, 0x02); // TIFF (PackBits) compression
     const line = new Uint8Array(16);
@@ -107,7 +116,7 @@ export function parseStatus(r) {
   if (e2 & 0x20) errs.push('Overheating');
   const widthMm = r[10] === 4 ? 3.5 : r[10];
   return {
-    widthMm, mediaType: MEDIA_TYPES[r[11]] || `Type 0x${r[11].toString(16)}`,
+    widthMm, mediaTypeCode: r[11], mediaType: MEDIA_TYPES[r[11]] || `Type 0x${r[11].toString(16)}`,
     tapeColorCode: r[24], textColorCode: r[25],
     tapeColor: TAPE_COLOR[r[24]] || 'Unknown', textColor: TEXT_COLOR[r[25]] || 'Unknown',
     errors: errs, model: r[4],

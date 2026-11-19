@@ -5,15 +5,27 @@
 //  sheet       Labels on a printer sheet (PDF export places them on the template).
 // Sizes are in mm. Labels are always laid out landscape (width >= height when it matters).
 
-// Brother 128-pin, 180 dpi heads: printable pins and the pin offset for each tape width.
+// Brother 128-pin, 180 dpi heads (PT-D610BT, P710BT, P750W, E550W): printable pins and the
+// pin offset for each tape, from Brother's Raster Command Reference (2.3.2 and 2.3.5).
+// TZe tape can also print in high resolution: 180 dpi across the tape, 360 dpi along it.
 const TZE = [
   [3.5, 4, 24, 52], [6, 6, 32, 48], [9, 9, 50, 39], [12, 12, 70, 29], [18, 18, 112, 8], [24, 24, 128, 0],
+];
+// Heat-shrink tube: [designation mm, flat width mm, pins, offset, media type]. HS 2:1 = 0x11, HS 3:1 = 0x17.
+// No high resolution. The reference gives no width code for tubes, so the job skips the width check.
+const HSE = [
+  [5.8, 5.6, 28, 50, 0x11], [8.8, 8.7, 48, 40, 0x11], [11.7, 11.6, 66, 31, 0x11], [17.7, 17.8, 106, 11, 0x11], [23.6, 23.7, 128, 0, 0x11],
+  [5.2, 5.1, 20, 54, 0x17], [9.0, 9.0, 44, 42, 0x17], [11.2, 11.3, 50, 39, 0x17], [21.0, 20.9, 120, 4, 0x17],
 ];
 
 export const MEDIA = [
   ...TZE.map(([mm, code, pins, offset]) => ({
     id: `tze-${mm}`, group: 'Brother P-touch tape (TZe)', name: `${mm} mm tape`, kind: 'tape', dpi: 180,
-    tapeMm: mm, widthCode: code, pins, pinOffset: offset, direct: 'ptouch',
+    tapeMm: mm, widthCode: code, mediaType: 0x01, pins, pinOffset: offset, direct: 'ptouch', hdCapable: true,
+  })),
+  ...HSE.map(([mm, flat, pins, offset, type]) => ({
+    id: `hse-${mm}`, group: 'Brother heat-shrink tube (HSe)', name: `HS ${mm} mm tube (${type === 0x17 ? '3:1' : '2:1'})`, kind: 'tape', dpi: 180,
+    tapeMm: flat, widthCode: 0, mediaType: type, pins, pinOffset: offset, direct: 'ptouch', hdCapable: false,
   })),
   { id: 'ql-62', group: 'Brother QL rolls (300 dpi)', name: '62 mm continuous', kind: 'continuous', dpi: 300, heightMm: 58 },
   { id: 'ql-29', group: 'Brother QL rolls (300 dpi)', name: '29 mm continuous', kind: 'continuous', dpi: 300, heightMm: 25.9 },
@@ -44,6 +56,24 @@ export const MEDIA = [
 ];
 
 export const MEDIA_MAP = Object.fromEntries(MEDIA.map(m => [m.id, m]));
+
+// Length presets for tape and continuous rolls. `tight` presets also pick the smallest
+// margins: the printer's 2 mm minimum feed at each end, no padding and no tape edge, and
+// cut after each label, so every piece comes out at exactly `mm`.
+export const LENGTH_PRESETS = [
+  { id: 'slicc-33', group: 'SLICC', name: 'SLICC 33 mm', mm: 33, tight: true },
+  { id: 'slicc-63', group: 'SLICC', name: 'SLICC 63 mm', mm: 63, tight: true },
+  { id: 'len-25', group: 'Common lengths', name: '25 mm', mm: 25 },
+  { id: 'len-30', group: 'Common lengths', name: '30 mm', mm: 30 },
+  { id: 'len-40', group: 'Common lengths', name: '40 mm', mm: 40 },
+  { id: 'len-50', group: 'Common lengths', name: '50 mm', mm: 50 },
+  { id: 'len-75', group: 'Common lengths', name: '75 mm', mm: 75 },
+  { id: 'len-100', group: 'Common lengths', name: '100 mm', mm: 100 },
+];
+export const LENGTH_PRESET_MAP = Object.fromEntries(LENGTH_PRESETS.map(p => [p.id, p]));
+
+// Brother's minimum feed margin for the 128-pin printers (Raster Command Reference 2.3.3).
+export const PTOUCH_MIN_MARGIN_MM = 2;
 
 export const PAGE_SIZES = { a4: [210, 297], letter: [215.9, 279.4] };
 

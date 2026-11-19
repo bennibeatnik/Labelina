@@ -61,12 +61,20 @@
       <fieldset class="group">
         <legend>Media</legend>
         <label class="field wide"><span>Printer and label stock</span><select id="media" data-key="media"></select></label>
+        <label class="field wide" id="fHd"><span>Print resolution</span>
+          <select id="hd" data-key="hd">
+            <option value="">Standard · 180 × 180 dpi</option>
+            <option value="1">High (HD) · 180 × 360 dpi, sharper text, prints slower</option>
+          </select>
+        </label>
         <div class="field-row" id="customSize" hidden>
           <label class="field"><span>Width mm</span><input type="number" id="customW" data-key="customW" min="5" max="300" step="0.1"></label>
           <label class="field"><span>Height mm</span><input type="number" id="customH" data-key="customH" min="5" max="300" step="0.1"></label>
           <label class="field"><span>DPI</span><select id="customDpi" data-key="customDpi"><option>180</option><option>203</option><option>300</option><option>600</option></select></label>
         </div>
         <div id="lengthBlock">
+          <label class="field wide"><span>Length preset</span><select id="lengthPreset" data-key="lengthPreset"></select></label>
+          <p class="hint" id="presetHint" hidden></p>
           <label class="field wide"><span>Label length</span>
             <select id="lengthMode" data-key="lengthMode">
               <option value="auto">Fit to content</option>
@@ -215,7 +223,7 @@
           <label class="field"><span>Cutter</span><select id="cutMode" data-key="cutMode"><option value="each">Cut each label</option><option value="end">Cut at end</option><option value="chain">Chain (save tape)</option></select></label>
         </div>
         <div class="field-row">
-          <label class="field"><span>Feed margin mm</span><input type="number" id="marginMm" data-key="marginMm" min="1" max="20" step="0.5"></label>
+          <label class="field"><span>Feed margin mm</span><input type="number" id="marginMm" data-key="marginMm" min="2" max="20" step="0.5" title="Blank tape at each end of a label. 2 mm is the printer's minimum."></label>
           <label class="check"><input type="checkbox" id="flip" data-key="flip"> Flip</label>
           <label class="check"><input type="checkbox" id="mirror" data-key="mirror"> Mirror</label>
         </div>

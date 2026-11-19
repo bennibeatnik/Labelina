@@ -51,8 +51,12 @@ export const mmToDots = (mm, dpi) => mm * dpi / 25.4;
 // Effective media (custom sizes resolved).
 export function resolveMedia(media, style) {
   if (media.custom) return { ...media, widthMm: +style.customW || 60, heightMm: +style.customH || 20, dpi: +style.customDpi || 300 };
+  // High resolution (P-touch HD): 360 dpi along the tape, 180 dpi across it. Layout runs on a
+  // square 360 dpi grid; the 1-bit bitmap then merges every 2 rows into one printer dot (ySub).
+  if (media.hdCapable && (style.hd === '1' || style.hd === true)) return { ...media, dpi: 360, ySub: 2, hd: true };
   return media;
 }
+export const dpiLabel = m => (m.hd ? '180 × 360 dpi (HD)' : `${m.dpi} dpi`);
 
 export function labelLengthMm(lbl, style) {
   if (style.lengthMode === 'units') return (+lbl.len || 1) * (+style.unitPitch || 42) - (+style.unitInset || 0);
@@ -74,15 +78,17 @@ export function layout(lbl, env, fontPx) {
   const { style } = env;
   const media = env.media;
   const dpi = media.dpi, k = dpi / 25.4;
+  const ySub = media.ySub || 1; // layout rows per printed dot across the tape
   const errors = [];
   let H, W = null;
-  if (media.kind === 'tape') H = media.pins;
+  if (media.kind === 'tape') H = media.pins * ySub;
   else H = Math.round(media.heightMm * k);
   const variable = media.kind === 'tape' || media.kind === 'continuous';
   if (!variable) W = Math.round(media.widthMm * k);
   else {
     const L = labelLengthMm(lbl, style);
-    if (L != null) W = Math.max(Math.round(8 * k), Math.round((L - 2 * (env.feedMm || 0)) * k));
+    // 4.4 mm is Brother's minimum print length; other roll printers are similar.
+    if (L != null) W = Math.max(Math.round(4.4 * k), Math.round((L - 2 * (env.feedMm || 0)) * k));
   }
   const pad = Math.round((+style.padMm || 0) * k);
   const edge = media.kind === 'tape' ? Math.round((+style.edgeMm || 0) * k) : pad;
@@ -100,12 +106,15 @@ export function layout(lbl, env, fontPx) {
   let codeW = 0, belowH = 0;
   if (code && code.kind === 'qr') {
     const q = code.n + 2;
-    const mod = Math.floor(ih / q);
-    if (mod < 1) { errors.push('QR code is too dense for this label height'); code = null; }
+    let mod = Math.floor(ih / q);
+    mod -= mod % ySub; // keep modules square once rows are merged
+    if (mod < ySub) { errors.push('QR code is too dense for this label height'); code = null; }
     else {
-      if (mod === 1 && dpi < 250) errors.push('QR modules are 1 dot wide; phones may struggle to scan it');
+      if (mod === ySub && dpi / ySub < 250) errors.push('QR modules are 1 dot wide; phones may struggle to scan it');
       const side = mod * q;
-      codeBox = { kind: 'qr', mod, side, y: iy + Math.floor((ih - side) / 2) };
+      let y = iy + Math.floor((ih - side) / 2);
+      y -= y % ySub; // start on a printer dot
+      codeBox = { kind: 'qr', mod, side, y };
       codeW = side;
     }
   } else if (code && code.kind === 'bar') {
@@ -178,7 +187,7 @@ export function layout(lbl, env, fontPx) {
     else if (codeBox.below) codeBox.x = Math.round((W - codeBox.w) / 2);
     else codeBox.x = W - pad - codeBox.quiet - codeBox.w;
   }
-  return { W, H, dpi, k, lines, unitWidths, metrics: m, iconBoxes, textBox, codeBox, code, autoF, errors, fam, w1, w2, r, fontPx };
+  return { W, H, dpi, k, ySub, lines, unitWidths, metrics: m, iconBoxes, textBox, codeBox, code, autoF, errors, fam, w1, w2, r, fontPx };
 }
 
 // Build drawable primitives from a geometry at primary font size f.
@@ -225,7 +234,7 @@ export function scene(geo, f, style) {
     const lw = Math.max(1, Math.round(geo.k * 0.25));
     items.push({ k: 'frame', lw, round: style.border === 'round' ? Math.round(geo.k * 1.2) : 0 });
   }
-  return { W: geo.W, H: geo.H, dpi: geo.dpi, items, errors, invert: !!style.invert };
+  return { W: geo.W, H: geo.H, dpi: geo.dpi, ySub: geo.ySub || 1, items, errors, invert: !!style.invert };
 }
 
 export function colorsFor(sc) {
@@ -266,23 +275,34 @@ export function renderCanvas(sc, scale, customImages, canvas) {
   return c;
 }
 
-// Downsample a supersampled canvas into a 1-bit bitmap (1 = ink dot).
-export function toBitmap(canvas, scale, threshold = 0.5) {
-  const W = Math.round(canvas.width / scale), H = Math.round(canvas.height / scale);
+// Downsample a supersampled canvas into a 1-bit bitmap (1 = ink dot). With ySub = 2 (HD tape)
+// every 2 layout rows become one printer dot, so W is at 360 dpi and H at 180 dpi.
+export function toBitmap(canvas, scale, threshold = 0.5, ySub = 1) {
+  const sy = scale * ySub;
+  const W = Math.round(canvas.width / scale), H = Math.round(canvas.height / sy);
   const data = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, canvas.width, canvas.height).data;
   const bits = new Uint8Array(W * H);
-  const cw = canvas.width, n = scale * scale, cut = threshold * 255 * n;
+  const cw = canvas.width, n = scale * sy, cut = threshold * 255 * n;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       let s = 0;
-      for (let dy = 0; dy < scale; dy++) {
-        let p = ((y * scale + dy) * cw + x * scale) * 4;
+      for (let dy = 0; dy < sy; dy++) {
+        let p = ((y * sy + dy) * cw + x * scale) * 4;
         for (let dx = 0; dx < scale; dx++, p += 4) s += data[p];
       }
       bits[y * W + x] = s < cut ? 1 : 0;
     }
   }
-  return { bits, W, H };
+  return { bits, W, H, ySub };
+}
+
+// Bitmap with square pixels for previews and image exports (HD rows repeated).
+export function squareBitmap(bm) {
+  const f = bm.ySub || 1;
+  if (f === 1) return bm;
+  const H = bm.H * f, bits = new Uint8Array(bm.W * H);
+  for (let y = 0; y < H; y++) bits.set(bm.bits.subarray(((y / f) | 0) * bm.W, ((y / f) | 0) * bm.W + bm.W), y * bm.W);
+  return { bits, W: bm.W, H, ySub: 1 };
 }
 
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');

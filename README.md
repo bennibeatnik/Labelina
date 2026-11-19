@@ -11,7 +11,7 @@ It comes two ways from the same code:
 
 - **Parts library** with generators for screws and bolts (15 head types, 7 drives, metric and UNC/UNF, coarse/fine pitch, standard lengths per size, key/wrench sizes, ISO/DIN numbers), nuts, washers (with ID × OD × thickness), threaded inserts, standoffs, pins, clips and rivets. Electronics: resistors (E-series ranges, colour bands, SMD codes), capacitors (marking codes), inductors, diodes, transistors, ICs, regulators, LEDs, connectors, pin headers, wire, heat shrink, crystals, fuses, switches and batteries. Pick several sizes and lengths to generate a whole set of labels at once.
 - **About 90 built-in icons**, including head profiles and drive symbols, plus uploaded images.
-- **Media**: Brother P-touch TZe tape (3.5–24 mm, 180 dpi), Brother QL rolls, Dymo LabelWriter, 203 dpi thermal labels, label sheets (A4/Letter templates) and custom sizes. Tape length can fit the content, be fixed, or follow grid units (42 mm Gridfinity by default).
+- **Media**: Brother P-touch TZe tape (3.5–24 mm) in standard 180 × 180 dpi or **HD 180 × 360 dpi**, Brother HSe heat-shrink tube (2:1 and 3:1, nine sizes), Brother QL rolls, Dymo LabelWriter, 203 dpi thermal labels, label sheets (A4/Letter templates) and custom sizes. Tape length can fit the content, be fixed, follow grid units (42 mm Gridfinity by default), or use a **length preset**: SLICC 33 mm and 63 mm (cut at exactly that length with the smallest margins the printer allows) plus common lengths.
 - **Codes**: QR, Code 128, Code 39, EAN-13 and UPC-A. Modules are snapped to whole printer dots.
 - **Exports**: PDF sheet, PDF per label, PNG (printer-exact 1-bit with correct DPI metadata), PNG set (.zip), SVG, SVG set (.zip), ZPL, P-touch raster job (.bin) and CSV. Projects save and load as JSON and auto-save in the browser.
 - **Direct printing** to Brother P-touch tape printers (PT-D610BT and relatives) over WebUSB or Bluetooth via Web Serial.
@@ -64,6 +64,15 @@ These notes are for the web page. The desktop app avoids the browser and driver 
 - **USB on Windows**: the Brother driver claims the device, so the browser can't open it. Use Bluetooth, or switch the printer's driver to WinUSB with Zadig (Brother's own software won't see it until you switch back). On Linux, ChromeOS and macOS, USB usually works without this step.
 - The raster commands follow Brother's published reference for the 128-pin, 180 dpi tape printers (PT-E550W/P750W/P710BT). The D610BT uses the same head, but **this hasn't been tested on real hardware yet**. Print the *Test label* first; if the text comes out upside down or mirrored, tick *Flip* or *Mirror*.
 - If your model has no automatic cutter, use *One strip with cut marks* and cut along the dashed lines.
+
+## Tape geometry (Brother 128-pin printers)
+
+From Brother's Raster Command Reference for the PT-E550W/P750W/P710BT, which share the D610BT's print head:
+
+- **Across the tape** the head prints at most 128 dots (18.1 mm), so 24 mm tape keeps about 3 mm unprinted at each edge. Each tape's print area is in `js/media.js`.
+- **Along the tape** every label gets a feed margin at each end. **2 mm is the printer's minimum** (14 dots at 180 dpi, 28 at 360 dpi); smaller values are raised to 2 mm, and fixed lengths include both margins, so a 33 mm label is 2 + 29 + 2 mm.
+- The printer feeds out **at least 24.5 mm** per piece, and the first label of a run carries roughly 24 mm of leader because the cutter sits ahead of the print head. Chain printing avoids the leader on the next run, but leaves the last label in the printer until then.
+- **HD** (ESC i K bit 6) doubles the resolution along the tape only. Layout runs on a 360 dpi grid and pairs of rows are merged into one printer dot; QR modules are kept to even sizes so they stay square. HD is for TZe tape only.
 
 ## Project layout
 

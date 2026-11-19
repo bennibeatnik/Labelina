@@ -16,6 +16,16 @@ Last updated: 2026-11-19
 - The app's localStorage (origin `http://tauri.localhost`) is separate from the browser's, so move work across with Save project / Open.
 - Fonts and libraries are now self-hosted in `vendor/` for both versions.
 
+## Tape, HD and SLICC (added 2026-11-19)
+- Source of truth: Brother "Raster Command Reference" for PT-E550W/P750W/P710BT (download.brother.com/welcome/docp100064/cv_pte550wp750wp710bt_eng_raster_102.pdf). The D610BT isn't listed, but it uses the same 128-pin, 180 dpi head.
+- HD = 180 dpi across × 360 dpi along the tape, set with ESC i K bit 6; the margin is counted in 360 dpi dots (28 = 2 mm). TZe only. Implemented as layout on a square 360 grid plus 2:1 row merging (`ySub`) in `toBitmap`; `squareBitmap` repeats rows for previews and exports. **Untested on the printer.**
+- Minimum feed margin is 2 mm (spec). The old UI allowed 1 mm, which would have made fixed lengths about 2 mm too long; now clamped in the layout and in the job.
+- The printer feeds out at least 24.5 mm per piece; the first label of a run has about 24 mm of leader (24.3 mm "minimum margin with no precut").
+- SLICC (slicc.eu) label lengths the user needs: **33 mm and 63 mm**. The presets set fixed length, 2 mm feed margin, 0 padding, 0 tape edge, cut each. SLICC label zones are 6/9/12 mm high for 2U/3U/4U cartridges (slicc.eu); the user hasn't said which tape width they use.
+- HSe tubes were added from the reference's print-area table. Their width code isn't documented, so their jobs skip the width check (ESC i z flags 0x80). Untested.
+- Defaults changed: tape edge 0 (was 0.2). Padding stays 1.5 mm unless a SLICC preset is chosen.
+- Next: SLICC-specific designs that fit the 29 mm / 59 mm print length (the user asked to "work on designs that fit best").
+
 ## Origin and goal
 - Started as: "can I hack my Brother PT-D610BT to make perfect Gridfinity labels on the machine?"
 - Decision: **no custom firmware.** There's no public work on P-touch firmware, it risks bricking the printer, and new firmware wouldn't change the hardware limits (leader tape, no half-cut). Drive the printer from outside instead.

@@ -1,7 +1,7 @@
 import { ICONS, ICON_MAP, ICON_CATS, paintIcon } from './icons.js';
-import { MEDIA, MEDIA_MAP, TAPE_COLORS } from './media.js';
+import { MEDIA, MEDIA_MAP, TAPE_COLORS, LENGTH_PRESETS, LENGTH_PRESET_MAP, PTOUCH_MIN_MARGIN_MM } from './media.js';
 import { CODE_TYPES } from './codes.js';
-import { FONTS, layout, scene, renderCanvas, toBitmap, renderSVG, resolveMedia, clearMetrics, labelLengthMm } from './render.js';
+import { FONTS, layout, scene, renderCanvas, toBitmap, squareBitmap, renderSVG, resolveMedia, dpiLabel, clearMetrics, labelLengthMm } from './render.js';
 import { buildRasterJob, joinStrip, STATUS_REQUEST, parseStatus, connectUSB, connectSerial, IS_NATIVE, listNativePrinters, connectNative } from './ptouch.js';
 import { saveBlob, safeName, canvasToPNG, bitmapCanvas, bitmapToZPL, pdfPerLabel, pdfSheet, zipFiles, labelsToCSV, parseTable } from './exporters.js';
 import { CATEGORIES, COMMON_FIELDS, defaultsFor } from './library.js';
@@ -12,9 +12,9 @@ const LEGACY_STORE_KEY = 'partmark-studio-v1'; // pre-rename auto-save, read onc
 
 // ------------------------------------------------------------------ state
 const DEFAULTS = {
-  media: 'tze-12', customW: 60, customH: 20, customDpi: '300',
-  lengthMode: 'auto', lengthMm: 40, unitPitch: 42, unitInset: 6, tapeColor: 'bw',
-  align: 'left', codePos: 'right', iconScale: 1, padMm: 1.5, gapMm: 1, edgeMm: 0.2, border: 'none', invert: false,
+  media: 'tze-12', customW: 60, customH: 20, customDpi: '300', hd: '',
+  lengthPreset: '', lengthMode: 'auto', lengthMm: 40, unitPitch: 42, unitInset: 6, tapeColor: 'bw',
+  align: 'left', codePos: 'right', iconScale: 1, padMm: 1.5, gapMm: 1, edgeMm: 0, border: 'none', invert: false,
   showIcon: true, showIcon2: true, showCode: true,
   font: 'Roboto Condensed', w1: '700', w2: '400', sizeMode: 'auto', pt: 14, ratio: 0.66, match: true, upper: false,
   zoom: 'fit', outMode: 'pages', cutMode: 'each', marginMm: 2, flip: false, mirror: false, sheetPage: 'a4', skipSlots: 0,
@@ -90,7 +90,13 @@ const isVariable = m => m.kind === 'tape' || m.kind === 'continuous';
 const isMono = m => m.kind !== 'sheet';
 function env() {
   const media = currentMedia();
-  return { media, style: S, feedMm: media.kind === 'tape' && S.outMode === 'pages' ? +S.marginMm || 0 : 0 };
+  return { media, style: S, feedMm: feedMmFor(media) };
+}
+// Blank tape at each end of a label. P-touch printers won't go below 2 mm, so the layout
+// uses the same value the printer will, which keeps fixed lengths exact.
+function feedMmFor(media) {
+  if (media.kind !== 'tape' || S.outMode !== 'pages') return 0;
+  return Math.max(PTOUCH_MIN_MARGIN_MM, +S.marginMm || 0);
 }
 
 let fontVersion = 0;
@@ -125,7 +131,7 @@ function bitmapOf(i) {
   let bm = bmCache.get(r.key);
   if (!bm) {
     const ss = ssFor(r.sc.dpi);
-    bm = toBitmap(renderCanvas(r.sc, ss, customImages), ss);
+    bm = toBitmap(renderCanvas(r.sc, ss, customImages), ss, 0.5, r.sc.ySub);
     bmCache.set(r.key, bm);
   }
   return bm;
@@ -141,7 +147,7 @@ const hexRGBA = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), 
 function drawThumb(i, canvas) {
   const m = currentMedia();
   if (isMono(m)) {
-    const bm = bitmapOf(i);
+    const bm = squareBitmap(bitmapOf(i));
     const col = tapeColors();
     const src = bitmapCanvas(bm, hexRGBA(col.ink), hexRGBA(col.tape));
     const scale = Math.min(1, 132 / bm.W, 56 / bm.H) * 2;
@@ -202,7 +208,7 @@ function drawStage() {
   const tape = m.kind === 'tape';
   const fullH = tape ? Math.round(m.tapeMm * k) : sc.H;
   const offY = Math.round((fullH - sc.H) / 2);
-  const feed = tape && S.outMode === 'pages' ? Math.round((+S.marginMm || 0) * k) : 0;
+  const feed = Math.round(feedMmFor(m) * k);
   const totalW = sc.W + 2 * feed;
   const avail = Math.max(120, wrap.clientWidth - 40);
   let z;
@@ -265,7 +271,7 @@ function drawStage() {
 
   const lenMm = totalW / k, hMm = (tape ? m.tapeMm : sc.H / k);
   const what = tape ? `${m.tapeMm} mm tape` : m.kind === 'continuous' ? m.name : `${m.widthMm} × ${m.heightMm} mm`;
-  meta.textContent = `${what} · ${lenMm.toFixed(1)} × ${hMm.toFixed(1)} mm · ${sc.W} × ${sc.H} dots @ ${m.dpi} dpi`;
+  meta.textContent = `${what} · ${lenMm.toFixed(1)} × ${hMm.toFixed(1)} mm · ${sc.W} × ${sc.H / (sc.ySub || 1)} dots @ ${dpiLabel(m)}`;
   $('stagePos').textContent = `${i + 1} / ${labels.length}`;
   warn.innerHTML = '';
   for (const e of sc.errors) { const li = document.createElement('li'); li.textContent = e; warn.appendChild(li); }
@@ -575,6 +581,15 @@ function fillSelects() {
     list.forEach(m => og.appendChild(new Option(m.name, m.id)));
     ms.appendChild(og);
   }
+  const lp = $('lengthPreset');
+  lp.add(new Option('None (set the length below)', ''));
+  const pg = {};
+  LENGTH_PRESETS.forEach(p => { (pg[p.group] ||= []).push(p); });
+  for (const [g, list] of Object.entries(pg)) {
+    const og = document.createElement('optgroup'); og.label = g;
+    list.forEach(p => og.appendChild(new Option(p.name, p.id)));
+    lp.appendChild(og);
+  }
   TAPE_COLORS.forEach(c => $('tapeColor').add(new Option(c.name, c.id)));
   FONTS.forEach(f => $('font').add(new Option(f.family + (f.system ? ' (system)' : ''), f.family)));
 }
@@ -611,7 +626,25 @@ function updateDesignVisibility() {
   $('fSkip').hidden = m.kind !== 'sheet';
   $('sheetPage').disabled = m.kind === 'sheet';
   const what = m.custom ? `Custom ${m.widthMm}×${m.heightMm} mm` : m.name;
-  $('mediaChip').textContent = `${what} · ${m.dpi} dpi`;
+  $('mediaChip').textContent = `${what} · ${dpiLabel(m)}`;
+  $('fHd').hidden = !MEDIA_MAP[S.media]?.hdCapable;
+  const pre = LENGTH_PRESET_MAP[S.lengthPreset];
+  $('presetHint').hidden = !pre;
+  if (pre) {
+    const tight = pre.tight ? ' Margins are as small as the printer allows: 2 mm of blank tape at each end, no padding.' : '';
+    $('presetHint').textContent = `Each label is cut at ${pre.mm} mm.${tight} The first label of a print run can come out longer, because the printer feeds about 24 mm of tape before its first cut.`;
+  }
+}
+// Applies a length preset. Tight presets (SLICC) also pick the smallest margins.
+function applyLengthPreset(id) {
+  const p = LENGTH_PRESET_MAP[id];
+  if (!p) return;
+  S.lengthMode = 'fixed';
+  S.lengthMm = p.mm;
+  if (p.tight) {
+    Object.assign(S, { marginMm: PTOUCH_MIN_MARGIN_MM, padMm: 0, edgeMm: 0, outMode: 'pages', cutMode: 'each' });
+  }
+  syncControls(); // labels with their own length (mm column) keep it, so 33 and 63 mm can share a batch
 }
 async function ensureFont() {
   const f = FONTS.find(x => x.family === S.font);
@@ -628,9 +661,11 @@ function onControl(el) {
   else if (el.type === 'number' || el.type === 'range') v = el.value === '' ? DEFAULTS[key] : +el.value;
   else v = el.value;
   S[key] = v;
+  if (key === 'lengthPreset') applyLengthPreset(v);
+  else if ((key === 'lengthMode' || key === 'lengthMm') && S.lengthPreset) { S.lengthPreset = ''; $('lengthPreset').value = ''; }
   updateDesignVisibility();
   if (key === 'font' || key === 'w1' || key === 'w2') ensureFont();
-  if (key === 'media' || key === 'lengthMode') buildTable();
+  if (key === 'media' || key === 'lengthMode' || key === 'lengthPreset') buildTable();
   rerender(true);
 }
 
@@ -786,8 +821,10 @@ async function readTape(quiet) {
     if (!st) { if (!quiet) log('The printer did not answer the status request.', 'err'); return; }
     log(`Tape: ${st.widthMm} mm ${st.mediaType.toLowerCase()}, ${st.textColor.toLowerCase()} on ${st.tapeColor.toLowerCase()}.`);
     st.errors.forEach(e => log(e, 'err'));
+    // Only switch for TZe tape; tube widths aren't reported in a documented way.
     const id = `tze-${st.widthMm}`;
-    if (MEDIA_MAP[id] && S.media !== id) { S.media = id; log(`Switched media to ${st.widthMm} mm tape.`, 'ok'); }
+    const isTape = st.mediaTypeCode === 0x01 || st.mediaTypeCode === 0x03;
+    if (isTape && MEDIA_MAP[id] && S.media !== id) { S.media = id; log(`Switched media to ${st.widthMm} mm tape.`, 'ok'); }
     const col = TAPE_COLORS.find(c => c.code === st.tapeColorCode && c.text === st.textColorCode);
     if (col) S.tapeColor = col.id;
     syncControls(); buildTable(); rerender(true);
@@ -804,7 +841,7 @@ function makeJob(bitmaps) {
   const pages = S.outMode === 'strip' && bitmaps.length > 1 ? [joinStrip(bitmaps)] : bitmaps;
   const cut = S.cutMode;
   return buildRasterJob(pages, {
-    media, marginMm: +S.marginMm, flip: S.flip, mirror: S.mirror,
+    media, marginMm: feedMmFor(media) || PTOUCH_MIN_MARGIN_MM, flip: S.flip, mirror: S.mirror,
     autoCut: cut !== 'end', chain: cut === 'chain',
   });
 }
@@ -821,7 +858,7 @@ async function print(which) {
     const geo = isVariable(media) && labelLengthMm(test, S) == null ? layout(test, E, g.autoF) : g;
     const sc = scene(geo, g.autoF, S);
     const ss = ssFor(sc.dpi);
-    bitmaps = [toBitmap(renderCanvas(sc, ss, customImages), ss)];
+    bitmaps = [toBitmap(renderCanvas(sc, ss, customImages), ss, 0.5, sc.ySub)];
   } else {
     const list = expandIndices(which);
     if (!list.length) { log('There are no labels to print.', 'err'); return; }
@@ -848,7 +885,7 @@ function fontCssUrl() {
 const customSrc = id => (customIcons.find(c => c.id === id) || {}).src;
 function exportCanvas(i) {
   const m = currentMedia();
-  if (isMono(m)) return bitmapCanvas(bitmapOf(i));
+  if (isMono(m)) return bitmapCanvas(squareBitmap(bitmapOf(i)));
   return renderCanvas(renders[i].sc, 2, customImages);
 }
 const mmOf = sc => ({ wMm: sc.W / sc.dpi * 25.4, hMm: sc.H / sc.dpi * 25.4 });
@@ -875,7 +912,7 @@ async function doExport(kind) {
       const blob = kind === 'pdf-each' ? pdfPerLabel(items) : pdfSheet(items, m.kind === 'sheet' ? m.sheet : null, S.sheetPage, { skip: +S.skipSlots || 0 });
       saveBlob(blob, kind === 'pdf-each' ? 'labels.pdf' : 'labels-sheet.pdf');
     } else if (kind === 'zpl') {
-      const zpl = labels.map((l, j) => bitmapToZPL(bitmapOf(j), l.qty || 1)).join('');
+      const zpl = labels.map((l, j) => bitmapToZPL(squareBitmap(bitmapOf(j)), l.qty || 1)).join('');
       saveBlob(new Blob([zpl], { type: 'text/plain' }), 'labels.zpl');
       if (m.dpi !== 203 && m.dpi !== 300) log(`ZPL was rendered at ${m.dpi} dpi. Pick a thermal media size that matches your printer's resolution.`);
     } else if (kind === 'bin') {
