@@ -2,7 +2,7 @@ import { ICONS, ICON_MAP, ICON_CATS, paintIcon } from './icons.js';
 import { MEDIA, MEDIA_MAP, TAPE_COLORS, LENGTH_PRESETS, LENGTH_PRESET_MAP, PTOUCH_MIN_MARGIN_MM } from './media.js';
 import { CODE_TYPES } from './codes.js';
 import { FONTS, layout, scene, renderCanvas, toBitmap, squareBitmap, renderSVG, resolveMedia, dpiLabel, clearMetrics, labelLengthMm, chooseF } from './render.js';
-import { buildRasterJob, joinStrip, STATUS_REQUEST, STATUS_ONLY, parseStatus, connectUSB, connectSerial, IS_NATIVE, listNativePrinters, connectNative } from './ptouch.js';
+import { buildRasterJob, joinStrip, STATUS_REQUEST, parseStatus, connectUSB, connectSerial, IS_NATIVE, listNativePrinters, connectNative } from './ptouch.js';
 import { saveBlob, safeName, canvasToPNG, bitmapCanvas, bitmapToZPL, pdfPerLabel, pdfSheet, zipFiles, labelsToCSV, parseTable } from './exporters.js';
 import { CATEGORIES, COMMON_FIELDS, defaultsFor } from './library.js';
 
@@ -1027,6 +1027,7 @@ async function doConnect(kind) {
 let busy = false;
 async function readTape(quiet) {
   if (!conn) { log('Connect a printer first.', 'err'); return; }
+  if (Date.now() < printingUntil) { if (!quiet) log('Wait until the printer has finished the label; asking it now would interrupt the job.'); return; }
   if (conn.canRead === false) {
     if (!quiet) log('The Windows print queue can\'t report the tape. Pick the tape size under Design, or connect the USB or Bluetooth entry to read it.');
     return;
@@ -1064,26 +1065,17 @@ function makeJob(bitmaps) {
     autoCut: cut !== 'end', chain: cut === 'chain',
   });
 }
-// Jobs switch automatic status messages off (as Brother's driver does), so we ask: send a bare
-// status request every ~0.4 s. Phase 1 = printing, phase 0 = idle/receiving. "Printed" needs
-// printing followed by idle; an error bit ends it at once.
-async function awaitPrinted(pages) {
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const deadline = Date.now() + 10000 + pages * 6000;
-  let sawPrinting = false, idleCount = 0;
-  while (Date.now() < deadline) {
-    let st = null;
-    try { await conn.write(STATUS_ONLY); st = parseStatus(await conn.read(32, 1200)); } catch { break; }
-    if (st) {
-      if (st.errors.length || st.statusType === 0x02) { log(`The printer reported: ${st.errors.join(', ') || 'an error'}.`, 'err'); return; }
-      if (st.phaseType === 1) { sawPrinting = true; idleCount = 0; }
-      else if (sawPrinting) { log(`Printed ${pages === 1 ? 'the label' : pages + ' labels'}.`, 'ok'); return; }
-      else if (++idleCount >= 8) break; // idle for ~3 s and never started
-    }
-    await sleep(400);
-  }
-  if (sawPrinting) log('The printer started but hasn\'t finished yet. Check it for a message.');
-  else log('The printer received the job but didn\'t start printing. Check its screen; if it says "Printing… please wait", note what it shows and tell us.', 'err');
+// Nothing may be sent to the printer while it works on a job. Over USB it prints while data is
+// still arriving, so any extra bytes (a status request, say) look like more of the job: it then
+// skips the final feed and cut and waits on "Printing… please wait". So after a job we stay
+// silent until it must be done. The estimate is generous: ~10 mm/s plus time for the pre-cut,
+// the cut and the final feed.
+let printingUntil = 0;
+function printDurationMs(job, pages) {
+  const media = currentMedia();
+  const lineMm = 25.4 / (media.hd ? 360 : 180);
+  const lines = pages.reduce((s, p) => s + p.W, 0);
+  return Math.round(lines * lineMm / 10 * 1000) + 8000 + pages.length * 3000;
 }
 async function print(which) {
   const media = currentMedia();
@@ -1105,16 +1097,25 @@ async function print(which) {
     if (!list.length) { log('There are no labels to print.', 'err'); return; }
     bitmaps = list.map(bitmapOf);
   }
+  if (Date.now() < printingUntil) { log('The printer is still working on the last job. Wait until it has cut the label.', 'err'); return; }
   busy = true;
-  ['printSel', 'printAll', 'printTest'].forEach(id => { $(id).disabled = true; });
+  const buttons = ['printSel', 'printAll', 'printTest', 'checkTape'];
+  buttons.forEach(id => { $(id).disabled = true; });
+  let waitMs = 0;
   try {
+    const pages = S.outMode === 'strip' && bitmaps.length > 1 ? [joinStrip(bitmaps)] : bitmaps;
     const job = makeJob(bitmaps);
     log(`Sending ${bitmaps.length} label${bitmaps.length === 1 ? '' : 's'} (${(job.length / 1024).toFixed(1)} KB)…`);
     await conn.write(job);
-    if (conn.canRead === false) log('Sent to the Windows print queue. If it doesn\'t print, use the plain USB entry instead.', 'ok');
-    else await awaitPrinted(S.outMode === 'strip' && bitmaps.length > 1 ? 1 : bitmaps.length);
+    waitMs = printDurationMs(job, pages);
+    printingUntil = Date.now() + waitMs;
+    log('Sent. The printer pre-cuts, prints, then feeds and cuts by itself; Labelina sends nothing more until it\'s done.', 'ok');
   } catch (e) { connErr(e, 'the printer'); }
-  finally { busy = false; ['printSel', 'printAll', 'printTest'].forEach(id => { $(id).disabled = false; }); }
+  finally {
+    busy = false;
+    // Print and Read tape stay off until the printer must have finished.
+    setTimeout(() => { buttons.forEach(id => { $(id).disabled = false; }); }, waitMs);
+  }
 }
 
 // ---------------------------------------------------------------- exports

@@ -39,6 +39,12 @@ Last updated: 2026-11-19
 - Setting the label length through the driver (DEVMODE + its private block) didn't work reliably, so printing through the driver (GDI) was dropped. Capturing to a file still goes through Brother's queue and status monitor; avoid doing it on the user's PC without asking.
 - The Windows-queue entry was removed from the printer list (raw jobs hung there, "Printing, Retained", 0 bytes).
 
+## Never write to the printer during a job (2026-11-19, night)
+- With the driver-identical job, the D610BT pre-cut, printed, then stopped before the final feed and cut, stuck on "Printing… please wait".
+- Cause: after the job Labelina polled `ESC i S` every 0.4 s. Over USB with uncompressed data the printer prints while data still arrives (Brother reference 5.1), so the polls looked like more job data and it waited for the rest.
+- Fix: send nothing after a job until a generous estimate of the print time has passed (about 10 mm/s + 8 s + 3 s per page); Print and Read tape stay disabled until then. Brother's documented flow only *reads* status during a job. Checked with a fake port that records writes: 0 writes after the job.
+- If it still doesn't finish on its own: the next suspect is the last byte (Brother's driver output ends with `FF`, ours with `1A`).
+
 ## Text engine rewrite (2026-11-19, evening)
 - The user's complaints: hidden padding above and below text, only line 1 responding to size changes, one layout, QR jumping between sizes or vanishing.
 - Cause: the line height used "HdlkÅ" ascent (Å ring) + full descender + 0.12 em gap for every line, while drawing used less, so text sat centred with space around it. Plus one ratio for all lines and `match` (same size on every label) on by default.
