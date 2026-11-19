@@ -10,7 +10,7 @@ const BROTHER_VID = 0x04f9;
 export const MIN_MARGIN_MM = 2;
 
 // pages: array of {bits, W, H}. Each W column becomes one raster line. H must equal media.pins.
-// opts: { media, autoCut, chain, marginMm, flip, mirror }. media.hd = high resolution:
+// opts: { media, autoCut, chain, marginMm, flip, mirror, jobId (1–255) }. media.hd = high resolution:
 // raster lines (and the margin) are counted at 360 dpi along the tape.
 //
 // The command sequence mirrors what Brother's own Windows driver sends to the PT-D610BT
@@ -25,9 +25,13 @@ export function buildRasterJob(pages, opts) {
   const out = [];
   const push = (...b) => { for (const x of b) out.push(x); };
   for (let i = 0; i < 100; i++) out.push(0); // invalidate
-  push(0x1b, 0x40); // initialise
+  // No ESC @ here: Brother's driver doesn't send one.
   push(0x1b, 0x69, 0x61, 0x01); // raster mode
   push(0x1b, 0x69, 0x21, 0x01); // no automatic status notifications (as Brother's driver does)
+  // ESC i U: undocumented, sent by Brother's driver on every job. The 15 bytes are always the
+  // same except the 12th, which counts up by one per job (a job number), so we do the same.
+  const jobId = Math.min(255, Math.max(1, Math.round(opts.jobId ?? 1)));
+  push(0x1b, 0x69, 0x55, 0x4a, 0x00, 0x0c, 0xc8, 0x7f, 0x54, 0xad, 0x38, 0xdb, 0x00, 0x00, jobId & 0xff, 0x00, 0x00, 0x00);
   const minMargin = Math.round(MIN_MARGIN_MM * lineDpi / 25.4);
   const margin = Math.max(minMargin, Math.round((opts.marginMm ?? MIN_MARGIN_MM) * lineDpi / 25.4));
   pages.forEach((pg, idx) => {
@@ -59,7 +63,10 @@ export function buildRasterJob(pages, opts) {
       }
       push(0x47, 16, 0x00, ...line);
     }
-    push(idx === pages.length - 1 ? 0x1a : 0x0c);
+    // Brother's driver ends every page with FF (0x0C), including the last one. The reference
+    // manual says 1A for the last page, but on the D610BT a 1A-ended job printed and then hung
+    // on "Printing… please wait" without the final cut, so we follow the driver.
+    push(0x0c);
   });
   return new Uint8Array(out);
 }

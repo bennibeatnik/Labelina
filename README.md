@@ -103,6 +103,6 @@ desktop/            Tauri desktop app (Rust printer backend in src-tauri/src/pri
 - **New icon**: add an entry to `ICONS` in `js/icons.js`. Parts are SVG path strings on a 24 × 24 grid: `f` fill, `e` even-odd fill, `s` stroke, `d` dashed stroke, `w`/`wf` knock-out in the paper colour.
 - **New media or sheet template**: add an entry to `MEDIA` in `js/media.js`.
 
-After changes, open `/tests/selftest.html`; it should end with `DONE`.
+After changes, open `/tests/selftest.html`; it should end with `DONE`. For printing changes also run `node tests/brother-match.mjs`: it checks that Labelina's P-touch jobs are byte-for-byte what Brother's own driver sends (captures in `tests/brother-driver/`).
 
 Fastener dimensions are nominal values from the named standards. Check a supplier's datasheet before relying on them for engineering work.

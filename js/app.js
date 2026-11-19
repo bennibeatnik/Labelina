@@ -1062,8 +1062,16 @@ function makeJob(bitmaps) {
   const cut = S.cutMode;
   return buildRasterJob(pages, {
     media, marginMm: feedMmFor(media) || PTOUCH_MIN_MARGIN_MM, flip: S.flip, mirror: S.mirror,
-    autoCut: cut !== 'end', chain: cut === 'chain',
+    autoCut: cut !== 'end', chain: cut === 'chain', jobId: nextJobId(),
   });
+}
+// Job number for ESC i U, counting up like Brother's driver does (1–255, kept across restarts).
+function nextJobId() {
+  let n = 0;
+  try { n = parseInt(localStorage.getItem('labelina-jobid'), 10) || 0; } catch { }
+  n = (n % 255) + 1;
+  try { localStorage.setItem('labelina-jobid', String(n)); } catch { }
+  return n;
 }
 // Nothing may be sent to the printer while it works on a job. Over USB it prints while data is
 // still arriving, so any extra bytes (a status request, say) look like more of the job: it then
