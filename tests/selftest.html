@@ -1,0 +1,51 @@
+<!doctype html><meta charset="utf-8"><title>selftest</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<pre id="out"></pre>
+<script type="module">
+const out = [];
+try {
+  const R = await import('../js/render.js'); const M = await import('../js/media.js'); const L = await import('../js/library.js');
+  const X = await import('../js/exporters.js'); const P = await import('../js/ptouch.js');
+  const items = []; for (const c of L.CATEGORIES) items.push(...c.build(L.defaultsFor(c)).slice(0, 2));
+  items.push({ lines: ['QR test', 'x', ''], icon: 'gear', codeType: 'qr', code: 'https://example.com/bin/42' });
+  items.push({ lines: ['C128', '', ''], icon: '', codeType: 'code128', code: 'BIN-0042' });
+  items.push({ lines: ['EAN', '', ''], codeType: 'ean13', code: '400638133393' });
+  items.push({ lines: ['bad', '', ''], codeType: 'ean13', code: 'abc' });
+  const style = { font: 'Arial', w1: 700, w2: 400, ratio: 0.66, padMm: 1.5, gapMm: 1, edgeMm: 0.2, iconScale: 1, lengthMode: 'auto', lengthMm: 40, unitPitch: 42, unitInset: 6, codePos: 'right', align: 'left', showIcon: true, showIcon2: true, sizeMode: 'auto', border: 'round' };
+  let n = 0, errs = new Set();
+  for (const media of M.MEDIA) for (const mode of ['auto', 'units', 'fixed']) for (const pos of ['right', 'below']) {
+    const st = { ...style, lengthMode: mode, codePos: pos };
+    const env = { media: R.resolveMedia(media, st), style: st, feedMm: 2 };
+    for (const it of items) {
+      const lbl = { lines: [...it.lines, '', ''].slice(0, 3), icon: it.icon || '', icon2: it.icon2 || '', codeType: it.codeType || 'none', code: it.code || '', len: null };
+      const g = R.layout(lbl, env); const g2 = R.layout(lbl, env, g.autoF); const sc = R.scene(g2, g.autoF, st);
+      if (!(sc.W > 0 && sc.H > 0)) throw new Error('bad size ' + media.id);
+      for (const it2 of sc.items) if (it2.k === 'text' && !(it2.size > 0)) throw new Error('bad text size ' + media.id + ' ' + lbl.lines[0]);
+      sc.errors.forEach(e => errs.add(e.replace(/“.*”/, '“…”')));
+      n++;
+    }
+  }
+  out.push('layouts ok: ' + n, 'distinct warnings: ' + [...errs].join(' | '));
+  const media = M.MEDIA_MAP['tze-12']; const env = { media, style, feedMm: 2 };
+  const scs = items.slice(0, 6).map(it => { const lbl = { lines: [...it.lines, '', ''].slice(0, 3), icon: it.icon || '', icon2: it.icon2 || '', codeType: it.codeType || 'none', code: it.code || '' }; const g = R.layout(lbl, env); return R.scene(R.layout(lbl, env, g.autoF), g.autoF, style); });
+  const bms = scs.map(sc => R.toBitmap(R.renderCanvas(sc, 3), 3));
+  out.push('bitmap ink dots: ' + bms.map(b => b.bits.reduce((a, c) => a + c, 0)).join(','));
+  const job = P.buildRasterJob(bms, { media, marginMm: 2, autoCut: true }); out.push('raster job bytes: ' + job.length);
+  const strip = P.joinStrip(bms); out.push('strip: ' + strip.W + 'x' + strip.H);
+  out.push('zpl chars: ' + X.bitmapToZPL(bms[0]).length);
+  const png = await X.canvasToPNG(X.bitmapCanvas(bms[0]), 180); const b = new Uint8Array(await png.arrayBuffer());
+  out.push('png pHYs at 37: ' + String.fromCharCode(...b.slice(37, 41)) + ' size ' + b.length);
+  const svg = R.renderSVG(scs[0], () => null, ''); out.push('svg length ' + svg.length + ' starts ' + svg.slice(0, 38).replace(/\n/g, ' '));
+  const its = bms.map(bm => ({ canvas: X.bitmapCanvas(bm), wMm: bm.W / 180 * 25.4, hMm: bm.H / 180 * 25.4, qty: 2 }));
+  out.push('pdf each bytes: ' + X.pdfPerLabel(its).size);
+  out.push('pdf sheet (template) bytes: ' + X.pdfSheet(its, M.MEDIA_MAP['sh-5160'].sheet, 'letter', { skip: 3 }).size);
+  out.push('pdf sheet (packed) bytes: ' + X.pdfSheet(its, null, 'a4').size);
+  out.push('zip bytes: ' + (await X.zipFiles([{ name: 'a.txt', data: 'x' }, { name: 'a.txt', data: 'y' }])).size);
+  out.push('csv parse: ' + JSON.stringify(X.parseTable('line1,code\n"M3, x",abc\n')));
+  out.push('DONE');
+} catch (e) { out.push('FAIL ' + (e.stack || e)); }
+document.getElementById('out').textContent = out.join('\n');
+</script>

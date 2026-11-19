@@ -1,0 +1,14 @@
+# Local tooling (MemPalace memory index), not part of the app
+entities.json
+mempalace.yaml
+
+# OS / editor clutter
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+
+# Self-hosted copies of third-party libraries, if you choose to vendor them
+# (remove this line if you want them committed)
+# vendor/

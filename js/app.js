@@ -1,0 +1,934 @@
+import { ICONS, ICON_MAP, ICON_CATS, paintIcon } from './icons.js';
+import { MEDIA, MEDIA_MAP, TAPE_COLORS } from './media.js';
+import { CODE_TYPES } from './codes.js';
+import { FONTS, layout, scene, renderCanvas, toBitmap, renderSVG, resolveMedia, clearMetrics, labelLengthMm } from './render.js';
+import { buildRasterJob, joinStrip, STATUS_REQUEST, parseStatus, connectUSB, connectSerial } from './ptouch.js';
+import { saveBlob, safeName, canvasToPNG, bitmapCanvas, bitmapToZPL, pdfPerLabel, pdfSheet, zipFiles, labelsToCSV, parseTable } from './exporters.js';
+import { CATEGORIES, COMMON_FIELDS, defaultsFor } from './library.js';
+
+const $ = id => document.getElementById(id);
+const STORE_KEY = 'labelina-v1';
+const LEGACY_STORE_KEY = 'partmark-studio-v1'; // pre-rename auto-save, read once if the new key is empty
+
+// ------------------------------------------------------------------ state
+const DEFAULTS = {
+  media: 'tze-12', customW: 60, customH: 20, customDpi: '300',
+  lengthMode: 'auto', lengthMm: 40, unitPitch: 42, unitInset: 6, tapeColor: 'bw',
+  align: 'left', codePos: 'right', iconScale: 1, padMm: 1.5, gapMm: 1, edgeMm: 0.2, border: 'none', invert: false,
+  showIcon: true, showIcon2: true, showCode: true,
+  font: 'Roboto Condensed', w1: '700', w2: '400', sizeMode: 'auto', pt: 14, ratio: 0.66, match: true, upper: false,
+  zoom: 'fit', outMode: 'pages', cutMode: 'each', marginMm: 2, flip: false, mirror: false, sheetPage: 'a4', skipSlots: 0,
+};
+
+let uid = 1;
+const newId = () => 'L' + (Date.now().toString(36)) + (uid++).toString(36);
+const mkLabel = (o = {}) => ({
+  id: newId(), lines: [...(o.lines || ['', '', '']), '', '', ''].slice(0, 3), icon: o.icon || '', icon2: o.icon2 || '',
+  codeType: o.codeType || 'none', code: o.code || '', len: o.len ?? null, qty: o.qty || 1,
+});
+
+const SAMPLE = [
+  { lines: ['M3×8', 'Socket head · A2 SS', 'ISO 4762 · Key 2.5'], icon: 'shcs', icon2: 'd-hex' },
+  { lines: ['M3×12', 'Socket head · A2 SS', 'ISO 4762 · Key 2.5'], icon: 'shcs', icon2: 'd-hex' },
+  { lines: ['M4×10', 'Button head · A2 SS', 'ISO 7380 · Key 2.5'], icon: 'button', icon2: 'd-hex' },
+  { lines: ['M5×16', 'Flat head · Torx', 'ISO 14581 · T25'], icon: 'flat', icon2: 'd-torx' },
+  { lines: ['M3', 'Hex nut · A2 SS', 'ISO 4032 · AF 5.5'], icon: 'hexnut' },
+  { lines: ['M3', 'Flat washer · A2 SS', '3.2×7×0.5'], icon: 'washer' },
+  { lines: ['M3×5.7', 'Heat-set insert', 'Brass'], icon: 'insert' },
+  { lines: ['10 kΩ', '¼ W · 1% · THT', 'BRN BLK ORG'], icon: 'resistor' },
+  { lines: ['100 nF', 'MLCC · 50 V · X7R', '0805 · Code 104'], icon: 'capacitor' },
+  { lines: ['JST-XH 4P', 'Housing · 2.5 mm', ''], icon: 'jst' },
+  { lines: ['608ZZ', 'Ball bearing', '8×22×7'], icon: 'bearing', codeType: 'qr', code: '608ZZ' },
+];
+
+let S = { ...DEFAULTS };
+let labels = SAMPLE.map(mkLabel);
+let customIcons = []; // {id, name, src}
+const customImages = new Map();
+let selId = labels[0].id;
+let libCat = 'screws';
+const libValues = {};
+
+function load() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY) ?? localStorage.getItem(LEGACY_STORE_KEY);
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    applyProject(d, true);
+    if (d.libCat) libCat = d.libCat;
+    if (d.libValues) Object.assign(libValues, d.libValues);
+  } catch { /* storage unavailable or corrupt: keep defaults */ }
+}
+let saveTimer = 0;
+function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...projectData(), libCat, libValues })); } catch { /* quota or blocked */ }
+  }, 300);
+}
+function projectData() { return { app: 'labelina', version: 1, style: S, labels, customIcons }; }
+function applyProject(d, quiet) {
+  if (!d || typeof d !== 'object') throw new Error('Not a Labelina project file');
+  if (d.style) S = { ...DEFAULTS, ...d.style };
+  if (!MEDIA_MAP[S.media]) S.media = DEFAULTS.media;
+  if (Array.isArray(d.labels)) labels = d.labels.map(l => ({ ...mkLabel(l), id: l.id || newId() }));
+  if (Array.isArray(d.customIcons)) { customIcons = d.customIcons.filter(c => c && c.id && c.src); customIcons.forEach(loadCustomImage); }
+  selId = labels[0] ? labels[0].id : null;
+  if (!quiet) { syncControls(); buildTable(); renderCustomList(); rerender(true); }
+}
+function loadCustomImage(c) {
+  if (customImages.has(c.id)) return;
+  const img = new Image();
+  img.onload = () => rerender(true);
+  img.src = c.src;
+  customImages.set(c.id, img);
+}
+
+// --------------------------------------------------------------- rendering
+function currentMedia() { return resolveMedia(MEDIA_MAP[S.media] || MEDIA_MAP[DEFAULTS.media], S); }
+const isVariable = m => m.kind === 'tape' || m.kind === 'continuous';
+const isMono = m => m.kind !== 'sheet';
+function env() {
+  const media = currentMedia();
+  return { media, style: S, feedMm: media.kind === 'tape' && S.outMode === 'pages' ? +S.marginMm || 0 : 0 };
+}
+
+let fontVersion = 0;
+const bmCache = new Map();
+let renders = []; // per label: {sc, key}
+
+function computeRenders() {
+  const E = env();
+  const dpi = E.media.dpi;
+  const geos = labels.map(l => layout(l, E));
+  const fixedF = S.sizeMode === 'fixed' ? (+S.pt || 12) * dpi / 72 : null;
+  let fs = geos.map(g => (g.lines.length ? (fixedF ? Math.min(fixedF, g.autoF) : g.autoF) : 0));
+  if (S.match) {
+    const valid = fs.filter(f => f > 0);
+    if (valid.length) { const mn = Math.min(...valid); fs = fs.map(f => (f > 0 ? mn : f)); }
+  }
+  const { zoom, ...styleOnly } = S;
+  const styleKey = JSON.stringify([styleOnly, fontVersion, customIcons.length, E.feedMm]);
+  renders = labels.map((l, i) => {
+    const needsRelayout = isVariable(E.media) && labelLengthMm(l, S) == null;
+    const geo = needsRelayout ? layout(l, E, fs[i]) : geos[i];
+    const sc = scene(geo, fs[i], S);
+    return { sc, key: JSON.stringify([l.lines, l.icon, l.icon2, l.codeType, l.code, l.len, fs[i], styleKey]) };
+  });
+  if (bmCache.size > 600) bmCache.clear();
+}
+
+function ssFor(dpi) { return dpi <= 210 ? 3 : 2; }
+// 1-bit bitmap for label index i (cached).
+function bitmapOf(i) {
+  const r = renders[i];
+  let bm = bmCache.get(r.key);
+  if (!bm) {
+    const ss = ssFor(r.sc.dpi);
+    bm = toBitmap(renderCanvas(r.sc, ss, customImages), ss);
+    bmCache.set(r.key, bm);
+  }
+  return bm;
+}
+function tapeColors() {
+  const m = currentMedia();
+  if (m.kind !== 'tape') return { tape: '#ffffff', ink: '#111111' };
+  return TAPE_COLORS.find(c => c.id === S.tapeColor) || TAPE_COLORS[0];
+}
+const hexRGBA = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16), 255];
+
+// Draw label i into `canvas` as it will look printed (thumbnail use).
+function drawThumb(i, canvas) {
+  const m = currentMedia();
+  if (isMono(m)) {
+    const bm = bitmapOf(i);
+    const col = tapeColors();
+    const src = bitmapCanvas(bm, hexRGBA(col.ink), hexRGBA(col.tape));
+    const scale = Math.min(1, 132 / bm.W, 56 / bm.H) * 2;
+    canvas.width = Math.max(1, Math.round(bm.W * scale));
+    canvas.height = Math.max(1, Math.round(bm.H * scale));
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(src, 0, 0, canvas.width, canvas.height);
+  } else {
+    const sc = renders[i].sc;
+    const scale = Math.min(264 / sc.W, 56 / sc.H);
+    renderCanvas(sc, scale, customImages, canvas);
+  }
+}
+
+let rafQueued = false, fullRebuild = false;
+function rerender(full) {
+  if (full) fullRebuild = true;
+  if (rafQueued) return;
+  rafQueued = true;
+  requestAnimationFrame(() => {
+    rafQueued = false;
+    computeRenders();
+    labels.forEach((l, i) => {
+      const row = document.querySelector(`tr[data-id="${l.id}"]`);
+      if (!row) return;
+      drawThumb(i, row.querySelector('.thumb canvas'));
+      const errs = renders[i].sc.errors;
+      const flag = row.querySelector('.flag');
+      flag.hidden = !errs.length;
+      flag.title = errs.join('\n');
+      const lenInp = row.querySelector('.len input');
+      if (lenInp) lenInp.placeholder = S.lengthMode === 'units' ? '1' : String(S.lengthMm);
+    });
+    drawStage();
+    updateCounts();
+    fullRebuild = false;
+    save();
+  });
+}
+
+// ------------------------------------------------------------------ stage
+function selIndex() { const i = labels.findIndex(l => l.id === selId); return i < 0 ? 0 : i; }
+
+function drawStage() {
+  const cv = $('stageCanvas');
+  const wrap = $('stageWrap');
+  const meta = $('stageMeta'), warn = $('stageWarn');
+  if (!labels.length) {
+    cv.width = cv.height = 1; cv.style.width = cv.style.height = '0px';
+    meta.textContent = 'No labels'; $('stagePos').textContent = '0 / 0'; warn.innerHTML = '';
+    return;
+  }
+  const i = selIndex();
+  const r = renders[i], sc = r.sc;
+  const m = currentMedia();
+  const k = m.dpi / 25.4;
+  const tape = m.kind === 'tape';
+  const fullH = tape ? Math.round(m.tapeMm * k) : sc.H;
+  const offY = Math.round((fullH - sc.H) / 2);
+  const feed = tape && S.outMode === 'pages' ? Math.round((+S.marginMm || 0) * k) : 0;
+  const totalW = sc.W + 2 * feed;
+  const avail = Math.max(120, wrap.clientWidth - 40);
+  let z;
+  if (S.zoom === 'fit') z = Math.min(avail / totalW, 260 / fullH, 10);
+  else z = (S.zoom === 'true' ? 1 : +S.zoom) * 96 / m.dpi;
+  const rulerH = 26;
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = Math.round(totalW * z), cssH = Math.round(fullH * z) + rulerH;
+  cv.style.width = cssW + 'px'; cv.style.height = cssH + 'px';
+  cv.width = Math.round(cssW * dpr); cv.height = Math.round(cssH * dpr);
+  wrap.classList.toggle('wide', cssW > avail + 20);
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  const col = tapeColors();
+  // label body
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
+  ctx.fillStyle = col.tape;
+  const radius = m.kind === 'diecut' || m.kind === 'sheet' ? Math.min(1.5 * k * z, 10) : 1;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(0, 0, cssW, fullH * z, radius); else ctx.rect(0, 0, cssW, fullH * z);
+  ctx.fill();
+  ctx.restore();
+  // printed content
+  if (isMono(m)) {
+    const bm = bitmapOf(i);
+    const src = bitmapCanvas(bm, hexRGBA(col.ink), [0, 0, 0, 0]);
+    ctx.imageSmoothingEnabled = z < 1;
+    ctx.drawImage(src, feed * z, offY * z, sc.W * z, sc.H * z);
+  } else {
+    const hi = renderCanvas(sc, Math.max(0.5, z * dpr), customImages);
+    ctx.drawImage(hi, 0, 0, sc.W * z, sc.H * z);
+  }
+  // feed margins
+  if (feed) {
+    ctx.fillStyle = 'rgba(120,130,145,0.18)';
+    ctx.fillRect(0, 0, feed * z, fullH * z);
+    ctx.fillRect((feed + sc.W) * z, 0, feed * z, fullH * z);
+    ctx.strokeStyle = 'rgba(120,130,145,0.6)'; ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(feed * z + 0.5, 0); ctx.lineTo(feed * z + 0.5, fullH * z);
+    ctx.moveTo((feed + sc.W) * z - 0.5, 0); ctx.lineTo((feed + sc.W) * z - 0.5, fullH * z); ctx.stroke(); ctx.setLineDash([]);
+  }
+  // ruler
+  const y0 = fullH * z + 6;
+  const pxPerMm = k * z;
+  const totalMm = totalW / k;
+  ctx.strokeStyle = 'rgba(223,229,238,0.55)'; ctx.fillStyle = 'rgba(223,229,238,0.8)';
+  ctx.lineWidth = 1; ctx.font = '10px "IBM Plex Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.beginPath(); ctx.moveTo(0, y0 + 0.5); ctx.lineTo(cssW, y0 + 0.5);
+  const every = pxPerMm >= 3 ? 1 : pxPerMm >= 0.8 ? 5 : 10;
+  for (let mm = 0; mm <= totalMm + 0.001; mm += every) {
+    const x = Math.round(mm * pxPerMm) + 0.5;
+    const len = mm % 10 === 0 ? 7 : mm % 5 === 0 ? 5 : 3;
+    ctx.moveTo(x, y0); ctx.lineTo(x, y0 + len);
+  }
+  ctx.stroke();
+  const labelEvery = pxPerMm * 10 >= 26 ? 10 : 20;
+  for (let mm = labelEvery; mm < totalMm - 2; mm += labelEvery) ctx.fillText(String(mm), mm * pxPerMm, y0 + 9);
+
+  const lenMm = totalW / k, hMm = (tape ? m.tapeMm : sc.H / k);
+  const what = tape ? `${m.tapeMm} mm tape` : m.kind === 'continuous' ? m.name : `${m.widthMm} × ${m.heightMm} mm`;
+  meta.textContent = `${what} · ${lenMm.toFixed(1)} × ${hMm.toFixed(1)} mm · ${sc.W} × ${sc.H} dots @ ${m.dpi} dpi`;
+  $('stagePos').textContent = `${i + 1} / ${labels.length}`;
+  warn.innerHTML = '';
+  for (const e of sc.errors) { const li = document.createElement('li'); li.textContent = e; warn.appendChild(li); }
+}
+
+// ------------------------------------------------------------------ table
+function iconThumb(canvas, id, px = 26) {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.height = Math.round(px * dpr);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const pad = canvas.width * 0.1;
+  paintIcon(ctx, id, pad, pad, canvas.width - 2 * pad, '#111111', '#ffffff', customImages);
+}
+function iconName(id) {
+  if (!id) return 'No icon';
+  if (id.startsWith('img-')) return (customIcons.find(c => c.id === id) || {}).name || 'Image';
+  return (ICON_MAP[id] || {}).name || id;
+}
+
+function makeIconButton(l, slot) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'icon-pick';
+  const id = l[slot];
+  b.title = `${slot === 'icon' ? 'Icon' : 'Second icon'}: ${iconName(id)}`;
+  b.setAttribute('aria-label', b.title);
+  if (id) { const c = document.createElement('canvas'); iconThumb(c, id); b.appendChild(c); }
+  else { b.classList.add('empty'); b.textContent = '+'; }
+  b.addEventListener('click', () => openIconDialog(id, slot === 'icon' ? 'Choose an icon' : 'Choose a second icon', newIcon => {
+    l[slot] = newIcon;
+    b.replaceWith(makeIconButton(l, slot));
+    rerender();
+  }));
+  return b;
+}
+
+function makeRow(l) {
+  const tr = document.createElement('tr');
+  tr.dataset.id = l.id;
+  if (l.id === selId) tr.classList.add('sel');
+  const td = cls => { const c = document.createElement('td'); if (cls) c.className = cls; tr.appendChild(c); return c; };
+  const thumb = td();
+  thumb.innerHTML = '<div class="thumb"><canvas></canvas><span class="flag" hidden></span></div>';
+  thumb.firstChild.addEventListener('click', () => select(l.id));
+  ['l1', 'l2', 'l3'].forEach((cls, i) => {
+    const c = td(cls);
+    const inp = document.createElement('input');
+    inp.type = 'text'; inp.value = l.lines[i] || ''; inp.id = `${l.id}-line${i + 1}`;
+    inp.setAttribute('aria-label', `Line ${i + 1}`);
+    inp.placeholder = i === 0 ? 'Main text' : '';
+    inp.addEventListener('input', () => { l.lines[i] = inp.value; rerender(); });
+    c.appendChild(inp);
+  });
+  const ic = td(); const box = document.createElement('div'); box.className = 'icons-cell';
+  box.append(makeIconButton(l, 'icon'), makeIconButton(l, 'icon2')); ic.appendChild(box);
+  const cc = td(); const cbox = document.createElement('div'); cbox.className = 'code-cell';
+  const sel = document.createElement('select'); sel.id = `${l.id}-ctype`; sel.setAttribute('aria-label', 'Code type');
+  CODE_TYPES.forEach(t => sel.add(new Option(t.name, t.id, false, t.id === l.codeType)));
+  const cin = document.createElement('input'); cin.type = 'text'; cin.value = l.code; cin.id = `${l.id}-code`; cin.placeholder = 'Code text'; cin.setAttribute('aria-label', 'Code text');
+  cin.disabled = l.codeType === 'none';
+  sel.addEventListener('change', () => { l.codeType = sel.value; cin.disabled = sel.value === 'none'; if (sel.value !== 'none' && !l.code) { l.code = l.lines[0]; cin.value = l.code; } rerender(); });
+  cin.addEventListener('input', () => { l.code = cin.value; rerender(); });
+  cbox.append(sel, cin); cc.appendChild(cbox);
+  const lc = td('len'); lc.hidden = !lenColumnVisible();
+  const lin = document.createElement('input'); lin.type = 'number'; lin.min = '0.5'; lin.step = S.lengthMode === 'units' ? '0.5' : '1';
+  lin.value = l.len ?? ''; lin.id = `${l.id}-len`; lin.setAttribute('aria-label', 'Length');
+  lin.addEventListener('input', () => { l.len = lin.value === '' ? null : +lin.value; rerender(); });
+  lc.appendChild(lin);
+  const qc = td('qty');
+  const qin = document.createElement('input'); qin.type = 'number'; qin.min = '1'; qin.max = '999'; qin.value = l.qty; qin.id = `${l.id}-qty`; qin.setAttribute('aria-label', 'Copies');
+  qin.addEventListener('input', () => { l.qty = Math.max(1, Math.min(999, parseInt(qin.value, 10) || 1)); updateCounts(); save(); });
+  qc.appendChild(qin);
+  const ac = td(); ac.innerHTML = '<div class="act"><button type="button" class="dup" title="Duplicate" aria-label="Duplicate">⧉</button><button type="button" class="del" title="Delete" aria-label="Delete">×</button></div>';
+  ac.querySelector('.dup').addEventListener('click', () => {
+    const idx = labels.indexOf(l);
+    const copy = mkLabel({ ...l, lines: [...l.lines] });
+    labels.splice(idx + 1, 0, copy);
+    selId = copy.id; buildTable(); rerender(true);
+  });
+  ac.querySelector('.del').addEventListener('click', () => {
+    const idx = labels.indexOf(l);
+    labels.splice(idx, 1);
+    if (selId === l.id) selId = labels[Math.min(idx, labels.length - 1)]?.id || null;
+    buildTable(); rerender(true);
+  });
+  tr.addEventListener('focusin', () => select(l.id, true));
+  return tr;
+}
+
+function lenColumnVisible() { return isVariable(currentMedia()) && S.lengthMode !== 'auto'; }
+function buildTable() {
+  const tb = $('labelRows');
+  tb.innerHTML = '';
+  labels.forEach(l => tb.appendChild(makeRow(l)));
+  $('lenHead').hidden = !lenColumnVisible();
+  $('lenHead').textContent = S.lengthMode === 'units' ? 'Units' : 'mm';
+  $('emptyList').hidden = labels.length > 0;
+}
+function select(id, fromFocus) {
+  if (selId === id) return;
+  selId = id;
+  document.querySelectorAll('#labelRows tr').forEach(tr => tr.classList.toggle('sel', tr.dataset.id === id));
+  if (!fromFocus) { const row = document.querySelector(`tr[data-id="${id}"]`); row && row.scrollIntoView({ block: 'nearest' }); }
+  drawStage();
+}
+function updateCounts() {
+  const copies = labels.reduce((s, l) => s + (l.qty || 1), 0);
+  $('listCount').textContent = labels.length ? `${labels.length} labels · ${copies} to print` : '';
+  $('printAll').textContent = copies ? `Print all (${copies})` : 'Print all';
+}
+
+// ------------------------------------------------------------ icon dialog
+let iconCb = null;
+function openIconDialog(current, title, cb) {
+  iconCb = cb;
+  $('iconDlgTitle').textContent = title;
+  $('iconSearch').value = '';
+  buildIconGrid(current, '');
+  const d = $('iconDlg');
+  if (d.showModal) d.showModal(); else d.setAttribute('open', '');
+  setTimeout(() => $('iconSearch').focus(), 30);
+}
+function buildIconGrid(current, q) {
+  const grid = $('iconGrid');
+  grid.innerHTML = '';
+  q = q.trim().toLowerCase();
+  const match = (name, extra = '') => !q || (name + ' ' + extra).toLowerCase().includes(q);
+  const section = (title, items) => {
+    if (!items.length) return;
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `<h4>${title}</h4><div class="grid"></div>`;
+    const g = wrap.querySelector('.grid');
+    items.forEach(it => g.appendChild(it));
+    grid.appendChild(wrap);
+  };
+  const opt = (id, name) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'icon-opt' + (id === current ? ' cur' : '');
+    if (id) { const c = document.createElement('canvas'); iconThumb(c, id, 40); b.appendChild(c); }
+    else { const s = document.createElement('span'); s.style.cssText = 'width:40px;height:40px;display:grid;place-items:center;font-size:20px;color:var(--muted)'; s.textContent = '∅'; b.appendChild(s); }
+    b.append(document.createTextNode(name));
+    b.addEventListener('click', () => { $('iconDlg').close(); iconCb && iconCb(id); });
+    return b;
+  };
+  if (!q) section('None', [opt('', 'No icon')]);
+  section('Your images', customIcons.filter(c => match(c.name)).map(c => opt(c.id, c.name)));
+  for (const cat of ICON_CATS) section(cat, ICONS.filter(i => i.cat === cat && match(i.name, i.tags + ' ' + i.id)).map(i => opt(i.id, i.name)));
+  if (!grid.children.length) grid.innerHTML = '<p class="hint">No icons match that search.</p>';
+}
+
+// ---------------------------------------------------------------- library
+function renderCatPicker() {
+  const root = $('catPicker');
+  root.innerHTML = '';
+  const groups = [...new Set(CATEGORIES.map(c => c.group))];
+  for (const g of groups) {
+    const wrap = document.createElement('div'); wrap.className = 'cat-group';
+    wrap.innerHTML = `<h4>${g}</h4><div class="cat-grid"></div>`;
+    const grid = wrap.querySelector('.cat-grid');
+    CATEGORIES.filter(c => c.group === g).forEach(c => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'cat'; b.setAttribute('aria-pressed', String(c.id === libCat));
+      const cv = document.createElement('canvas'); iconThumb(cv, c.icon, 30);
+      b.append(cv, document.createTextNode(c.name));
+      b.addEventListener('click', () => { libCat = c.id; renderCatPicker(); renderLibForm(); save(); });
+      grid.appendChild(b);
+    });
+    root.appendChild(wrap);
+  }
+}
+function libCategory() { return CATEGORIES.find(c => c.id === libCat) || CATEGORIES[0]; }
+function libVals() {
+  const cat = libCategory();
+  if (!libValues[cat.id]) libValues[cat.id] = defaultsFor(cat);
+  const v = libValues[cat.id];
+  for (const f of [...cat.fields, ...COMMON_FIELDS]) if (!(f.id in v)) v[f.id] = Array.isArray(f.def) ? [...f.def] : f.def;
+  return v;
+}
+const resolveOpts = (f, v) => (typeof f.options === 'function' ? f.options(v) : f.options || []);
+
+function renderLibForm() {
+  const cat = libCategory();
+  const v = libVals();
+  const form = $('libForm');
+  form.innerHTML = '';
+  for (const f of [...cat.fields, ...COMMON_FIELDS]) {
+    if (f.show && !f.show(v)) continue;
+    const fid = `lib-${cat.id}-${f.id}`;
+    if (f.type === 'chips') {
+      const opts = resolveOpts(f, v);
+      const wrap = document.createElement('div'); wrap.className = 'chips-field';
+      const head = document.createElement('span');
+      head.innerHTML = `<label>${f.label}</label>`;
+      const allBtn = document.createElement('button'); allBtn.type = 'button';
+      const allOn = opts.length && opts.every(o => v[f.id].includes(o.v));
+      allBtn.textContent = allOn ? 'None' : 'All';
+      allBtn.addEventListener('click', () => {
+        const ids = opts.map(o => o.v);
+        v[f.id] = allOn ? v[f.id].filter(x => !ids.includes(x)) : [...new Set([...v[f.id], ...ids])];
+        renderLibForm();
+      });
+      head.appendChild(allBtn);
+      const chips = document.createElement('div'); chips.className = 'chips'; chips.id = fid;
+      opts.forEach(o => {
+        const c = document.createElement('button'); c.type = 'button'; c.className = 'chip'; c.textContent = o.t;
+        c.setAttribute('aria-pressed', String(v[f.id].includes(o.v)));
+        c.addEventListener('click', () => {
+          const on = v[f.id].includes(o.v);
+          v[f.id] = on ? v[f.id].filter(x => x !== o.v) : [...v[f.id], o.v];
+          c.setAttribute('aria-pressed', String(!on));
+          if (cat.fields.some(x => typeof x.options === 'function' && x.id !== f.id)) renderLibForm(); else updateLibPreview();
+        });
+        chips.appendChild(c);
+      });
+      wrap.append(head, chips);
+      form.appendChild(wrap);
+    } else if (f.type === 'check') {
+      const lab = document.createElement('label'); lab.className = 'check check-field';
+      const inp = document.createElement('input'); inp.type = 'checkbox'; inp.id = fid; inp.checked = !!v[f.id];
+      inp.addEventListener('change', () => { v[f.id] = inp.checked; updateLibPreview(); });
+      lab.append(inp, document.createTextNode(' ' + f.label));
+      form.appendChild(lab);
+    } else {
+      const lab = document.createElement('label'); lab.className = 'field' + (f.wide || f.type === 'textarea' ? ' wide' : '');
+      lab.innerHTML = `<span>${f.label}</span>`;
+      let inp;
+      if (f.type === 'select' || f.type === 'icon') {
+        inp = document.createElement('select');
+        if (f.type === 'icon') {
+          inp.add(new Option('No icon', ''));
+          for (const c of ICON_CATS) {
+            const og = document.createElement('optgroup'); og.label = c;
+            ICONS.filter(i => i.cat === c).forEach(i => og.appendChild(new Option(i.name, i.id)));
+            inp.appendChild(og);
+          }
+          customIcons.forEach(c => inp.add(new Option(c.name, c.id)));
+        } else resolveOpts(f, v).forEach(o => inp.add(new Option(o.t, o.v)));
+        inp.value = v[f.id];
+        if (inp.value !== v[f.id] && inp.options.length) { v[f.id] = inp.options[0].value; inp.value = v[f.id]; }
+        inp.addEventListener('change', () => { v[f.id] = inp.value; renderLibForm(); });
+      } else if (f.type === 'textarea') {
+        inp = document.createElement('textarea'); inp.rows = 5; inp.value = v[f.id] || '';
+        inp.addEventListener('input', () => { v[f.id] = inp.value; updateLibPreview(); });
+      } else {
+        inp = document.createElement('input'); inp.type = 'text'; inp.value = v[f.id] || ''; if (f.placeholder) inp.placeholder = f.placeholder;
+        inp.addEventListener('input', () => { v[f.id] = inp.value; updateLibPreview(); });
+      }
+      inp.id = fid;
+      lab.appendChild(inp);
+      form.appendChild(lab);
+    }
+  }
+  updateLibPreview();
+}
+
+function libBuild() {
+  const cat = libCategory();
+  const v = libVals();
+  let items = [];
+  try { items = cat.build(v) || []; } catch (e) { console.error(e); items = []; }
+  let n = parseInt(v.skuStart, 10) || 1;
+  return items.map(it => {
+    const lines = [...it.lines, '', '', ''].slice(0, 3);
+    let codeType = 'none', code = '';
+    if (v.codeType && v.codeType !== 'none') {
+      codeType = v.codeType;
+      code = v.codeFrom === 'sku' ? `${v.skuPrefix || ''}${String(n++).padStart(3, '0')}` : v.codeType === 'qr' ? lines.filter(Boolean).join(' ') : lines[0];
+    }
+    return { lines, icon: it.icon || '', icon2: it.icon2 || '', codeType, code };
+  });
+}
+function updateLibPreview() {
+  const items = libBuild();
+  $('libCount').textContent = items.length;
+  const ul = $('libPreview');
+  ul.innerHTML = '';
+  items.slice(0, 40).forEach(it => {
+    const li = document.createElement('li');
+    const b = document.createElement('b'); b.textContent = it.lines[0];
+    const s = document.createElement('span'); s.textContent = [it.lines[1], it.lines[2]].filter(Boolean).join(' / ');
+    li.append(b, s); ul.appendChild(li);
+  });
+  if (items.length > 40) { const li = document.createElement('li'); li.innerHTML = `<span>and ${items.length - 40} more</span>`; ul.appendChild(li); }
+  $('libAdd').disabled = $('libReplace').disabled = !items.length;
+  $('libAdd').textContent = items.length ? `Add ${items.length} to list` : 'Add to list';
+  save();
+}
+function addLabels(items, replace) {
+  const fresh = items.map(mkLabel);
+  if (replace) labels = fresh; else labels.push(...fresh);
+  if (fresh.length) selId = fresh[0].id;
+  buildTable();
+  rerender(true);
+  const row = document.querySelector(`tr[data-id="${selId}"]`);
+  row && row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+// ------------------------------------------------------- design controls
+function fillSelects() {
+  const ms = $('media');
+  const groups = {};
+  MEDIA.forEach(m => { (groups[m.group] ||= []).push(m); });
+  for (const [g, list] of Object.entries(groups)) {
+    const og = document.createElement('optgroup'); og.label = g;
+    list.forEach(m => og.appendChild(new Option(m.name, m.id)));
+    ms.appendChild(og);
+  }
+  TAPE_COLORS.forEach(c => $('tapeColor').add(new Option(c.name, c.id)));
+  FONTS.forEach(f => $('font').add(new Option(f.family + (f.system ? ' (system)' : ''), f.family)));
+}
+function syncControls() {
+  document.querySelectorAll('[data-key]').forEach(el => {
+    const v = S[el.dataset.key];
+    if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
+  });
+  updateDesignVisibility();
+}
+function updateDesignVisibility() {
+  const m = currentMedia();
+  const variable = isVariable(m);
+  $('customSize').hidden = !m.custom;
+  $('lengthBlock').hidden = !variable;
+  $('fLengthMm').hidden = S.lengthMode !== 'fixed';
+  $('fUnitPitch').hidden = $('fUnitInset').hidden = S.lengthMode !== 'units';
+  $('unitHint').hidden = S.lengthMode !== 'units';
+  const p = +S.unitPitch || 42, ins = +S.unitInset || 0;
+  $('unitHint').textContent = `1 unit = ${(p - ins).toFixed(1)} mm · 2 = ${(2 * p - ins).toFixed(1)} mm · 3 = ${(3 * p - ins).toFixed(1)} mm. Set each label's units in the list.`;
+  $('fTapeColor').hidden = m.kind !== 'tape';
+  $('fEdge').hidden = m.kind !== 'tape';
+  $('fPt').hidden = S.sizeMode !== 'fixed';
+  $('iconScaleOut').textContent = Math.round(S.iconScale * 100) + '%';
+  $('ratioOut').textContent = Math.round(S.ratio * 100) + '%';
+  const tape = m.kind === 'tape';
+  $('printBody').hidden = !tape;
+  $('connUsb').hidden = $('connBt').hidden = !tape || !!conn;
+  $('connClose').hidden = !conn;
+  $('printNA').hidden = tape;
+  document.querySelector('[data-exp="bin"]').disabled = !tape;
+  $('sheetRow').hidden = false;
+  $('fSkip').hidden = m.kind !== 'sheet';
+  $('sheetPage').disabled = m.kind === 'sheet';
+  const what = m.custom ? `Custom ${m.widthMm}×${m.heightMm} mm` : m.name;
+  $('mediaChip').textContent = `${what} · ${m.dpi} dpi`;
+}
+async function ensureFont() {
+  const f = FONTS.find(x => x.family === S.font);
+  if (!f || f.system || !document.fonts) return;
+  try {
+    await Promise.all([S.w1, S.w2].map(w => document.fonts.load(`${w} 40px "${S.font}"`)));
+  } catch { /* fall back silently */ }
+  clearMetrics(); fontVersion++; rerender(true);
+}
+function onControl(el) {
+  const key = el.dataset.key;
+  let v;
+  if (el.type === 'checkbox') v = el.checked;
+  else if (el.type === 'number' || el.type === 'range') v = el.value === '' ? DEFAULTS[key] : +el.value;
+  else v = el.value;
+  S[key] = v;
+  updateDesignVisibility();
+  if (key === 'font' || key === 'w1' || key === 'w2') ensureFont();
+  if (key === 'media' || key === 'lengthMode') buildTable();
+  rerender(true);
+}
+
+// ----------------------------------------------------------------- import
+const HEADER_MAP = [
+  [/^(line ?1|text|label|name|title|part)$/i, 'l1'], [/^(line ?2|sub(title)?|desc(ription)?|detail)$/i, 'l2'], [/^(line ?3|note|spec(s)?)$/i, 'l3'],
+  [/^(icon ?1?|graphic|symbol)$/i, 'icon'], [/^(icon ?2|drive)$/i, 'icon2'], [/^(code|qr|barcode|sku|url)$/i, 'code'],
+  [/^(code[ _]?type|format)$/i, 'codeType'], [/^(len(gth)?|units?|u|size)$/i, 'len'], [/^(qty|copies|count|quantity)$/i, 'qty'],
+];
+function findIcon(s) {
+  if (!s) return '';
+  const q = s.trim().toLowerCase();
+  if (ICON_MAP[q]) return q;
+  const hit = ICONS.find(i => i.name.toLowerCase() === q) || ICONS.find(i => i.name.toLowerCase().includes(q) || i.tags.includes(q));
+  const custom = customIcons.find(c => c.name.toLowerCase() === q || c.id === s.trim());
+  return hit ? hit.id : custom ? custom.id : '';
+}
+function findCodeType(s, code) {
+  if (!s) return code ? 'qr' : 'none';
+  const q = s.toLowerCase().replace(/[\s-]/g, '');
+  const t = CODE_TYPES.find(c => c.id === q || c.name.toLowerCase().replace(/[\s-]/g, '') === q);
+  return t ? t.id : 'qr';
+}
+function importRows(replace) {
+  const rows = parseTable($('importText').value);
+  const msg = $('importMsg');
+  if (!rows.length) { msg.textContent = 'Nothing to import. Paste rows or load a CSV file first.'; return; }
+  let map = rows[0].map(h => (HEADER_MAP.find(([re]) => re.test(h.trim())) || [])[1] || null);
+  let body = rows;
+  if (map.some(Boolean)) body = rows.slice(1);
+  else map = ['l1', 'l2', 'l3', 'code'];
+  const items = body.map(r => {
+    const g = key => { const i = map.indexOf(key); return i >= 0 ? (r[i] || '').trim() : ''; };
+    const code = g('code');
+    return {
+      lines: [g('l1'), g('l2'), g('l3')], icon: findIcon(g('icon')), icon2: findIcon(g('icon2')),
+      code, codeType: code ? findCodeType(g('codeType'), code) : 'none',
+      len: g('len') ? +g('len') || null : null, qty: Math.max(1, parseInt(g('qty'), 10) || 1),
+    };
+  }).filter(it => it.lines.some(Boolean));
+  if (!items.length) { msg.textContent = 'No rows with text were found.'; return; }
+  addLabels(items, replace);
+  msg.textContent = `Imported ${items.length} label${items.length === 1 ? '' : 's'}.`;
+}
+function renderCustomList() {
+  const root = $('customList');
+  root.innerHTML = '';
+  customIcons.forEach(c => {
+    const d = document.createElement('div'); d.className = 'custom-item';
+    const img = document.createElement('img'); img.src = c.src; img.alt = '';
+    const name = document.createElement('span'); name.textContent = c.name;
+    const del = document.createElement('button'); del.type = 'button'; del.textContent = '×'; del.title = `Remove ${c.name}`; del.setAttribute('aria-label', del.title);
+    del.addEventListener('click', () => {
+      customIcons = customIcons.filter(x => x.id !== c.id); customImages.delete(c.id);
+      labels.forEach(l => { if (l.icon === c.id) l.icon = ''; if (l.icon2 === c.id) l.icon2 = ''; });
+      renderCustomList(); buildTable(); rerender(true);
+    });
+    d.append(img, name, del); root.appendChild(d);
+  });
+}
+
+// ---------------------------------------------------------------- printer
+let conn = null;
+function log(text, cls) {
+  const li = document.createElement('li');
+  li.textContent = text;
+  if (cls) li.className = cls;
+  const ol = $('log');
+  ol.prepend(li);
+  while (ol.children.length > 30) ol.lastChild.remove();
+}
+function connErr(e, what) {
+  const msg = String(e && (e.message || e));
+  if (e && (e.name === 'NotFoundError' || e.name === 'AbortError')) { log('No printer was chosen.'); return; }
+  if (e && e.code === 'claim') {
+    log('USB found the printer, but Windows\' Brother driver is holding it, so the browser can\'t open it. Use Bluetooth instead, or switch the printer to the WinUSB driver (see Connection help).', 'err');
+    console.warn(e); return;
+  }
+  const blocked = !window.isSecureContext || /permissions policy|feature .* disallowed/i.test(msg);
+  if (blocked) { log(`This page isn't allowed to use ${what} here. Open the studio directly in Chrome or Edge over HTTPS or localhost.`, 'err'); return; }
+  log(`${what} error: ${e && e.name ? e.name + ': ' : ''}${msg}`, 'err');
+}
+function setConn(c) {
+  conn = c;
+  const pill = $('connPill');
+  pill.textContent = c ? `${c.kind} · ${c.name}` : 'Not connected';
+  pill.classList.toggle('on', !!c);
+  updateDesignVisibility();
+}
+async function doConnect(kind) {
+  try {
+    const c = kind === 'usb' ? await connectUSB() : await connectSerial();
+    setConn(c);
+    log(`Connected over ${c.kind}.`, 'ok');
+    readTape(true);
+  } catch (e) { connErr(e, kind === 'usb' ? 'USB' : 'Bluetooth'); }
+}
+let busy = false;
+async function readTape(quiet) {
+  if (!conn) { log('Connect a printer first.', 'err'); return; }
+  if (busy) return;
+  busy = true;
+  try {
+    await conn.write(STATUS_REQUEST);
+    const st = parseStatus(await conn.read(32, 3000));
+    if (!st) { if (!quiet) log('The printer did not answer the status request.', 'err'); return; }
+    log(`Tape: ${st.widthMm} mm ${st.mediaType.toLowerCase()}, ${st.textColor.toLowerCase()} on ${st.tapeColor.toLowerCase()}.`);
+    st.errors.forEach(e => log(e, 'err'));
+    const id = `tze-${st.widthMm}`;
+    if (MEDIA_MAP[id] && S.media !== id) { S.media = id; log(`Switched media to ${st.widthMm} mm tape.`, 'ok'); }
+    const col = TAPE_COLORS.find(c => c.code === st.tapeColorCode && c.text === st.textColorCode);
+    if (col) S.tapeColor = col.id;
+    syncControls(); buildTable(); rerender(true);
+  } catch (e) { connErr(e, 'the printer'); } finally { busy = false; }
+}
+function expandIndices(which) {
+  const idx = which === 'sel' ? [selIndex()] : labels.map((_, i) => i);
+  const out = [];
+  idx.forEach(i => { for (let q = 0; q < (labels[i].qty || 1); q++) out.push(i); });
+  return out;
+}
+function makeJob(bitmaps) {
+  const media = currentMedia();
+  const pages = S.outMode === 'strip' && bitmaps.length > 1 ? [joinStrip(bitmaps)] : bitmaps;
+  const cut = S.cutMode;
+  return buildRasterJob(pages, {
+    media, marginMm: +S.marginMm, flip: S.flip, mirror: S.mirror,
+    autoCut: cut !== 'end', chain: cut === 'chain',
+  });
+}
+async function print(which) {
+  const media = currentMedia();
+  if (media.kind !== 'tape') { log('Direct printing needs P-touch tape media.', 'err'); return; }
+  if (!conn) { log('Connect a printer first: USB or Bluetooth.', 'err'); return; }
+  if (busy) return;
+  let bitmaps;
+  if (which === 'test') {
+    const test = mkLabel({ lines: ['TOP ▲  START →', 'Orientation test', ''], icon: 'tag' });
+    const E = env();
+    const g = layout(test, E);
+    const geo = isVariable(media) && labelLengthMm(test, S) == null ? layout(test, E, g.autoF) : g;
+    const sc = scene(geo, g.autoF, S);
+    const ss = ssFor(sc.dpi);
+    bitmaps = [toBitmap(renderCanvas(sc, ss, customImages), ss)];
+  } else {
+    const list = expandIndices(which);
+    if (!list.length) { log('There are no labels to print.', 'err'); return; }
+    bitmaps = list.map(bitmapOf);
+  }
+  busy = true;
+  ['printSel', 'printAll', 'printTest'].forEach(id => { $(id).disabled = true; });
+  try {
+    const job = makeJob(bitmaps);
+    log(`Sending ${bitmaps.length} label${bitmaps.length === 1 ? '' : 's'} (${(job.length / 1024).toFixed(1)} KB)…`);
+    await conn.write(job);
+    log('Sent to the printer.', 'ok');
+  } catch (e) { connErr(e, 'the printer'); }
+  finally { busy = false; ['printSel', 'printAll', 'printTest'].forEach(id => { $(id).disabled = false; }); }
+}
+
+// ---------------------------------------------------------------- exports
+function fontCssUrl() {
+  const f = FONTS.find(x => x.family === S.font);
+  if (!f || f.system) return '';
+  const w = [...new Set([S.w1, S.w2].map(Number))].filter(x => f.weights.includes(x));
+  return `https://fonts.googleapis.com/css2?family=${encodeURIComponent(f.family).replace(/%20/g, '+')}${w.length ? ':wght@' + w.sort((a, b) => a - b).join(';') : ''}&display=swap`;
+}
+const customSrc = id => (customIcons.find(c => c.id === id) || {}).src;
+function exportCanvas(i) {
+  const m = currentMedia();
+  if (isMono(m)) return bitmapCanvas(bitmapOf(i));
+  return renderCanvas(renders[i].sc, 2, customImages);
+}
+const mmOf = sc => ({ wMm: sc.W / sc.dpi * 25.4, hMm: sc.H / sc.dpi * 25.4 });
+const fileStem = i => `${String(i + 1).padStart(3, '0')}-${safeName(labels[i].lines[0])}`;
+
+async function doExport(kind) {
+  if (!labels.length && kind !== 'csv') { log('Add some labels first.', 'err'); return; }
+  const m = currentMedia();
+  const i = selIndex();
+  try {
+    if (kind === 'png') {
+      saveBlob(await canvasToPNG(exportCanvas(i), isMono(m) ? m.dpi : m.dpi * 2), `${safeName(labels[i].lines[0])}.png`);
+    } else if (kind === 'png-zip') {
+      const files = [];
+      for (let j = 0; j < labels.length; j++) files.push({ name: `${fileStem(j)}.png`, data: await canvasToPNG(exportCanvas(j), isMono(m) ? m.dpi : m.dpi * 2) });
+      saveBlob(await zipFiles(files), 'labels-png.zip');
+    } else if (kind === 'svg') {
+      saveBlob(new Blob([renderSVG(renders[i].sc, customSrc, fontCssUrl())], { type: 'image/svg+xml' }), `${safeName(labels[i].lines[0])}.svg`);
+    } else if (kind === 'svg-zip') {
+      const files = labels.map((_, j) => ({ name: `${fileStem(j)}.svg`, data: renderSVG(renders[j].sc, customSrc, fontCssUrl()) }));
+      saveBlob(await zipFiles(files), 'labels-svg.zip');
+    } else if (kind === 'pdf-each' || kind === 'pdf-sheet') {
+      const items = labels.map((l, j) => ({ canvas: exportCanvas(j), ...mmOf(renders[j].sc), qty: l.qty || 1 }));
+      const blob = kind === 'pdf-each' ? pdfPerLabel(items) : pdfSheet(items, m.kind === 'sheet' ? m.sheet : null, S.sheetPage, { skip: +S.skipSlots || 0 });
+      saveBlob(blob, kind === 'pdf-each' ? 'labels.pdf' : 'labels-sheet.pdf');
+    } else if (kind === 'zpl') {
+      const zpl = labels.map((l, j) => bitmapToZPL(bitmapOf(j), l.qty || 1)).join('');
+      saveBlob(new Blob([zpl], { type: 'text/plain' }), 'labels.zpl');
+      if (m.dpi !== 203 && m.dpi !== 300) log(`ZPL was rendered at ${m.dpi} dpi. Pick a thermal media size that matches your printer's resolution.`);
+    } else if (kind === 'bin') {
+      if (m.kind !== 'tape') { log('The raster job is only for P-touch tape.', 'err'); return; }
+      saveBlob(new Blob([makeJob(expandIndices('all').map(bitmapOf))], { type: 'application/octet-stream' }), 'ptouch-job.bin');
+    } else if (kind === 'csv') {
+      saveBlob(new Blob([labelsToCSV(labels)], { type: 'text/csv' }), 'labels.csv');
+    }
+    log(`Downloaded ${kind.toUpperCase().replace('-', ' ')}.`, 'ok');
+  } catch (e) { console.error(e); log(String(e.message || e), 'err'); }
+}
+
+// ------------------------------------------------------------------ wiring
+function wire() {
+  document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', String(x === t)));
+    document.querySelectorAll('.tabpanel').forEach(p => { p.hidden = p.id !== `panel-${t.dataset.tab}`; });
+  }));
+  $('mediaChip').addEventListener('click', () => { $('tab-design').click(); $('media').focus(); });
+  document.querySelectorAll('[data-key]').forEach(el => el.addEventListener(el.type === 'range' || el.type === 'number' ? 'input' : 'change', () => onControl(el)));
+
+  $('prevLabel').addEventListener('click', () => { if (labels.length) select(labels[(selIndex() - 1 + labels.length) % labels.length].id); });
+  $('nextLabel').addEventListener('click', () => { if (labels.length) select(labels[(selIndex() + 1) % labels.length].id); });
+  $('addBlank').addEventListener('click', () => addLabels([{ lines: ['New label', '', ''] }]));
+  $('clearAll').addEventListener('click', () => {
+    if (!labels.length) return;
+    $('confirmText').textContent = `Remove all ${labels.length} labels from the list?`;
+    $('confirmBar').hidden = false;
+  });
+  $('confirmNo').addEventListener('click', () => { $('confirmBar').hidden = true; });
+  $('confirmYes').addEventListener('click', () => { $('confirmBar').hidden = true; labels = []; selId = null; buildTable(); rerender(true); });
+
+  $('libAdd').addEventListener('click', () => addLabels(libBuild(), false));
+  $('libReplace').addEventListener('click', () => addLabels(libBuild(), true));
+
+  $('importAdd').addEventListener('click', () => importRows(false));
+  $('importReplace').addEventListener('click', () => importRows(true));
+  $('importFile').addEventListener('change', async e => {
+    const f = e.target.files[0]; if (!f) return;
+    $('importText').value = await f.text();
+    $('importMsg').textContent = `Loaded ${f.name}. Check the rows, then add them.`;
+    e.target.value = '';
+  });
+  $('imgFile').addEventListener('change', e => {
+    [...e.target.files].forEach(f => {
+      if (f.size > 1.5e6) { $('importMsg').textContent = `${f.name} is larger than 1.5 MB; use a smaller image.`; return; }
+      const rd = new FileReader();
+      rd.onload = () => {
+        const c = { id: 'img-' + Math.random().toString(36).slice(2, 9), name: f.name.replace(/\.\w+$/, '').slice(0, 30), src: rd.result };
+        customIcons.push(c); loadCustomImage(c); renderCustomList(); save();
+      };
+      rd.readAsDataURL(f);
+    });
+    e.target.value = '';
+  });
+
+  $('iconSearch').addEventListener('input', e => buildIconGrid(null, e.target.value));
+
+  $('connUsb').addEventListener('click', () => doConnect('usb'));
+  $('connBt').addEventListener('click', () => doConnect('bt'));
+  $('connClose').addEventListener('click', async () => { if (conn) await conn.close(); setConn(null); log('Disconnected.'); });
+  $('checkTape').addEventListener('click', () => readTape(false));
+  $('printSel').addEventListener('click', () => print('sel'));
+  $('printAll').addEventListener('click', () => print('all'));
+  $('printTest').addEventListener('click', () => print('test'));
+  document.querySelectorAll('.exp').forEach(b => b.addEventListener('click', () => doExport(b.dataset.exp)));
+
+  $('btnSave').addEventListener('click', () => saveBlob(new Blob([JSON.stringify(projectData(), null, 1)], { type: 'application/json' }), 'labels.labelina.json'));
+  $('btnOpen').addEventListener('click', () => $('openFile').click());
+  $('openFile').addEventListener('change', async e => {
+    const f = e.target.files[0]; if (!f) return;
+    try { applyProject(JSON.parse(await f.text())); log(`Opened ${f.name}.`, 'ok'); } catch (err) { log(`Couldn't open ${f.name}: ${err.message}`, 'err'); }
+    e.target.value = '';
+  });
+  $('btnNew').addEventListener('click', () => {
+    $('confirmText').textContent = labels.length ? `Start over? This removes all ${labels.length} labels.` : 'Start over?';
+    $('confirmBar').hidden = false;
+  });
+
+  let rt = 0;
+  window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(drawStage, 80); });
+  if (navigator.serial) navigator.serial.addEventListener('disconnect', () => { if (conn && conn.kind !== 'USB') { setConn(null); log('Printer disconnected.'); } });
+  if (navigator.usb) navigator.usb.addEventListener('disconnect', () => { if (conn && conn.kind === 'USB') { setConn(null); log('Printer disconnected.'); } });
+}
+
+function init() {
+  try { if (window.self !== window.top) $('frameNotice').hidden = false; } catch { $('frameNotice').hidden = false; }
+  load();
+  fillSelects();
+  syncControls();
+  wire();
+  renderCatPicker();
+  renderLibForm();
+  renderCustomList();
+  buildTable();
+  rerender(true);
+  const tabFromHash = () => { const t = document.querySelector(`.tab[data-tab="${location.hash.slice(1)}"]`); if (t) t.click(); };
+  tabFromHash();
+  window.addEventListener('hashchange', tabFromHash);
+  if (!('usb' in navigator) && !('serial' in navigator)) log('Direct printing needs Chrome or Edge on a desktop computer. Downloads work in any browser.');
+  if (document.fonts) document.fonts.ready.then(() => { clearMetrics(); fontVersion++; rerender(true); });
+  ensureFont();
+}
+init();

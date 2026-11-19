@@ -1,0 +1,44 @@
+# Labelina: project notes
+
+Last updated: 2026-11-19
+
+## Name and repo
+- Renamed from "Partmark Label Studio" to **Labelina** on 2026-11-19.
+- Repo: https://github.com/bennibeatnik/Labelina
+- The auto-save key moved from `partmark-studio-v1` to `labelina-v1`; the app reads the old key once if the new one is empty. Old `.partmark.json` project files still open.
+
+## Origin and goal
+- Started as: "can I hack my Brother PT-D610BT to make perfect Gridfinity labels on the machine?"
+- Decision: **no custom firmware.** There's no public work on P-touch firmware, it risks bricking the printer, and new firmware wouldn't change the hardware limits (leader tape, no half-cut). Drive the printer from outside instead.
+- Goal grew into a **public, self-hosted web studio** for labelling parts and storage of all kinds: fasteners (McMaster-Carr-style options), electronics storage and drawers. Gridfinity is one preset, not the focus.
+- The owner plans to host it on their own server for public use.
+
+## Architecture decisions
+- Plain static site: ES modules, no build step, no backend. Everything runs client-side; nothing is uploaded.
+- Libraries from cdnjs (qrcode-generator 1.4.4, JsBarcode 3.11.6, jsPDF 2.5.1, JSZip 3.10.1); fonts from Google Fonts. For GDPR or offline use, self-host them in `vendor/` (see README).
+- Layout happens in **printer dots at the media's dpi**, so barcode and QR modules land on whole dots. A layout builds a "scene" that is shared by the canvas renderer (preview, PNG, PDF), the SVG renderer and the 1-bit bitmap (printing, ZPL, .bin).
+- The preview shows the thresholded 1-bit bitmap for thermal media, so it matches what prints.
+- Library categories are data-driven: form `fields` + `build(values)` in `js/library.js`. Adding a category means adding an object there.
+- State auto-saves to localStorage, which is tied to the URL origin (port matters). Projects also save and open as JSON.
+
+## Printing (P-touch D610BT)
+- Raster protocol taken from Brother's reference for the 128-pin, 180 dpi models (PT-E550W/P750W/P710BT). **Not yet tested on the real D610BT.**
+- Orientation is unknown, so Flip and Mirror options are exposed; the user prints the Test label to calibrate.
+- Auto-cutter behaviour of the D610BT is unknown. The "One strip with cut marks" output mode is the fallback.
+- **WebUSB on Windows fails**: Brother's driver holds the device, so `open()` throws "Access denied". Fixed the misleading error message (it used to say the page wasn't allowed). Options: Bluetooth via Web Serial (pair in Windows → COM port), or switch to WinUSB with Zadig (breaks P-touch Editor until reverted).
+- The Bluetooth path hasn't been confirmed working on the user's machine yet.
+- Direct printing works only in Chromium browsers (Chrome, Edge, Brave, Opera) on desktop, over HTTPS or localhost. Design and all exports work in every browser.
+
+## Running it
+- Double-click `start-studio.cmd`, which serves on http://localhost:8000 and opens the browser.
+- Or run `python -m http.server 8000` in the folder.
+- Self-test: `/tests/selftest.html` should end with `DONE` (7,614 layout combinations plus every exporter).
+
+## Status (2026-11-12)
+- Built and verified in headless Chrome: parts library (22 categories), about 90 icons, 30 media profiles, codes, all exporters, light/dark themes, phone layout.
+- The user liked it ("really slick") and has **more updates planned for a later session**; details not given yet.
+
+## Open questions / next steps
+- Confirm Bluetooth printing and orientation on the real D610BT; record the correct Flip/Mirror defaults.
+- Collect the user's planned updates.
+- Before public hosting: decide on self-hosting fonts and libraries, and pick a domain.

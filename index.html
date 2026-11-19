@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Labelina</title>
+<meta name="description" content="Design labels for fasteners, electronics and storage bins. Export PDF, PNG, SVG, ZPL or print straight to a Brother P-touch from the browser.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=Roboto+Condensed:wght@400;700&family=Inter:wght@400;700&family=Atkinson+Hyperlegible:wght@400;700&family=Archivo+Narrow:wght@400;700&family=Saira+Condensed:wght@400;700&family=Oswald:wght@400;700&family=Bebas+Neue&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="css/studio.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body>
+<!--APP-START-->
+<header class="topbar">
+  <div class="topbar-in">
+    <a class="brand" href="#" aria-label="Labelina">
+      <span class="brand-tape" aria-hidden="true"><span>LA</span></span>
+      <span class="brand-text"><strong>Labelina</strong><em>Label Studio</em></span>
+    </a>
+    <button class="media-chip" id="mediaChip" type="button" title="Change media"></button>
+    <div class="top-actions">
+      <button type="button" class="btn ghost" id="btnNew">New</button>
+      <button type="button" class="btn ghost" id="btnOpen">Open</button>
+      <button type="button" class="btn ghost" id="btnSave">Save project</button>
+      <input type="file" id="openFile" accept=".json,application/json" hidden>
+    </div>
+  </div>
+</header>
+
+<div class="notice" id="frameNotice" hidden>
+  This preview runs inside a protected frame, so printing and downloads are switched off here. Host the files yourself or open them locally to use those.
+</div>
+
+<main class="studio">
+  <!-- Left: tools -->
+  <aside class="pane tools" aria-label="Tools">
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" class="tab" id="tab-library" aria-selected="true" data-tab="library">Parts library</button>
+      <button type="button" role="tab" class="tab" id="tab-design" aria-selected="false" data-tab="design">Design</button>
+      <button type="button" role="tab" class="tab" id="tab-import" aria-selected="false" data-tab="import">Import</button>
+    </div>
+
+    <section class="tabpanel" id="panel-library" role="tabpanel" aria-labelledby="tab-library">
+      <div id="catPicker" class="cat-picker"></div>
+      <form id="libForm" class="lib-form" autocomplete="off"></form>
+      <div class="lib-result">
+        <div class="lib-count"><strong id="libCount">0</strong> labels</div>
+        <ul id="libPreview" class="lib-preview"></ul>
+        <div class="row-btns">
+          <button type="button" class="btn primary" id="libAdd">Add to list</button>
+          <button type="button" class="btn" id="libReplace">Replace list</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="tabpanel" id="panel-design" role="tabpanel" aria-labelledby="tab-design" hidden>
+      <fieldset class="group">
+        <legend>Media</legend>
+        <label class="field wide"><span>Printer and label stock</span><select id="media" data-key="media"></select></label>
+        <div class="field-row" id="customSize" hidden>
+          <label class="field"><span>Width mm</span><input type="number" id="customW" data-key="customW" min="5" max="300" step="0.1"></label>
+          <label class="field"><span>Height mm</span><input type="number" id="customH" data-key="customH" min="5" max="300" step="0.1"></label>
+          <label class="field"><span>DPI</span><select id="customDpi" data-key="customDpi"><option>180</option><option>203</option><option>300</option><option>600</option></select></label>
+        </div>
+        <div id="lengthBlock">
+          <label class="field wide"><span>Label length</span>
+            <select id="lengthMode" data-key="lengthMode">
+              <option value="auto">Fit to content</option>
+              <option value="fixed">Fixed length</option>
+              <option value="units">Grid units (Gridfinity and similar)</option>
+            </select>
+          </label>
+          <div class="field-row">
+            <label class="field" id="fLengthMm"><span>Length mm</span><input type="number" id="lengthMm" data-key="lengthMm" min="8" max="500" step="0.5"></label>
+            <label class="field" id="fUnitPitch"><span>Unit pitch mm</span><input type="number" id="unitPitch" data-key="unitPitch" min="5" max="200" step="0.5"></label>
+            <label class="field" id="fUnitInset"><span>Minus mm</span><input type="number" id="unitInset" data-key="unitInset" min="0" max="50" step="0.5"></label>
+          </div>
+          <p class="hint" id="unitHint"></p>
+        </div>
+        <label class="field wide" id="fTapeColor"><span>Tape colour (preview)</span><select id="tapeColor" data-key="tapeColor"></select></label>
+      </fieldset>
+
+      <fieldset class="group">
+        <legend>Layout</legend>
+        <div class="field-row">
+          <label class="field"><span>Text align</span><select id="align" data-key="align"><option value="left">Left</option><option value="center">Centre</option></select></label>
+          <label class="field"><span>Code position</span><select id="codePos" data-key="codePos"><option value="right">Right</option><option value="below">Below (tall labels)</option></select></label>
+        </div>
+        <label class="field wide"><span>Icon size <output id="iconScaleOut"></output></span><input type="range" id="iconScale" data-key="iconScale" min="0.5" max="1" step="0.05"></label>
+        <div class="field-row">
+          <label class="field"><span>Padding mm</span><input type="number" id="padMm" data-key="padMm" min="0" max="10" step="0.25"></label>
+          <label class="field"><span>Gap mm</span><input type="number" id="gapMm" data-key="gapMm" min="0" max="10" step="0.25"></label>
+          <label class="field" id="fEdge"><span>Tape edge mm</span><input type="number" id="edgeMm" data-key="edgeMm" min="0" max="3" step="0.05"></label>
+        </div>
+        <div class="field-row">
+          <label class="field"><span>Border</span><select id="border" data-key="border"><option value="none">None</option><option value="line">Square</option><option value="round">Rounded</option></select></label>
+          <label class="check"><input type="checkbox" id="invert" data-key="invert"> Reverse (white on black)</label>
+        </div>
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="showIcon" data-key="showIcon"> Show icons</label>
+          <label class="check"><input type="checkbox" id="showIcon2" data-key="showIcon2"> Show second icon</label>
+          <label class="check"><input type="checkbox" id="showCode" data-key="showCode"> Show codes</label>
+        </div>
+      </fieldset>
+
+      <fieldset class="group">
+        <legend>Text</legend>
+        <label class="field wide"><span>Typeface</span><select id="font" data-key="font"></select></label>
+        <div class="field-row">
+          <label class="field"><span>Line 1 weight</span><select id="w1" data-key="w1"><option value="400">Regular</option><option value="500">Medium</option><option value="600">Semibold</option><option value="700">Bold</option></select></label>
+          <label class="field"><span>Other lines</span><select id="w2" data-key="w2"><option value="400">Regular</option><option value="500">Medium</option><option value="600">Semibold</option><option value="700">Bold</option></select></label>
+        </div>
+        <div class="field-row">
+          <label class="field"><span>Text size</span><select id="sizeMode" data-key="sizeMode"><option value="auto">Fit automatically</option><option value="fixed">Fixed point size</option></select></label>
+          <label class="field" id="fPt"><span>Point size</span><input type="number" id="pt" data-key="pt" min="4" max="96" step="0.5"></label>
+        </div>
+        <label class="field wide"><span>Lines 2–3 size <output id="ratioOut"></output></span><input type="range" id="ratio" data-key="ratio" min="0.4" max="1" step="0.02"></label>
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="match" data-key="match"> Same text size on every label</label>
+          <label class="check"><input type="checkbox" id="upper" data-key="upper"> Uppercase line 1</label>
+        </div>
+      </fieldset>
+    </section>
+
+    <section class="tabpanel" id="panel-import" role="tabpanel" aria-labelledby="tab-import" hidden>
+      <fieldset class="group">
+        <legend>Spreadsheet or CSV</legend>
+        <p class="hint">Paste rows from a spreadsheet or load a CSV. Recognised headers: <code>line1</code>, <code>line2</code>, <code>line3</code>, <code>icon</code>, <code>icon2</code>, <code>code</code>, <code>code_type</code>, <code>length</code>, <code>qty</code>. Without headers, columns are read as line 1, line 2, line 3, code.</p>
+        <label class="field wide"><span>Rows</span><textarea id="importText" rows="8" placeholder="line1,line2,icon,code&#10;M4×12,Socket head · A2,shcs,&#10;10 kΩ,¼ W · 1%,resistor,R-10K"></textarea></label>
+        <div class="row-btns">
+          <label class="btn file-btn">Load CSV<input type="file" id="importFile" accept=".csv,.tsv,.txt,text/csv" hidden></label>
+          <button type="button" class="btn primary" id="importAdd">Add rows</button>
+          <button type="button" class="btn" id="importReplace">Replace list</button>
+        </div>
+        <p class="hint" id="importMsg" role="status"></p>
+      </fieldset>
+      <fieldset class="group">
+        <legend>Your images</legend>
+        <p class="hint">Upload a logo or symbol (PNG, JPG or SVG). It joins the icon picker and is saved with the project.</p>
+        <div class="row-btns"><label class="btn file-btn">Upload image<input type="file" id="imgFile" accept="image/*" multiple hidden></label></div>
+        <div id="customList" class="custom-list"></div>
+      </fieldset>
+    </section>
+  </aside>
+
+  <!-- Centre: preview and list -->
+  <section class="pane workbench" aria-label="Labels">
+    <div class="stage">
+      <div class="stage-head">
+        <div class="stage-nav">
+          <button type="button" class="icon-btn" id="prevLabel" aria-label="Previous label">‹</button>
+          <span id="stagePos" class="mono"></span>
+          <button type="button" class="icon-btn" id="nextLabel" aria-label="Next label">›</button>
+        </div>
+        <div class="stage-meta mono" id="stageMeta"></div>
+        <label class="zoom"><span class="sr">Zoom</span>
+          <select id="zoom" data-key="zoom"><option value="fit">Fit</option><option value="true">Actual size</option><option value="2">2×</option><option value="4">4×</option></select>
+        </label>
+      </div>
+      <div class="stage-canvas" id="stageWrap"><canvas id="stageCanvas"></canvas></div>
+      <ul class="warnings" id="stageWarn"></ul>
+    </div>
+
+    <div class="list-head">
+      <h2>Labels <span class="count mono" id="listCount"></span></h2>
+      <div class="row-btns">
+        <button type="button" class="btn" id="addBlank">Add blank label</button>
+        <button type="button" class="btn ghost danger" id="clearAll">Clear list</button>
+      </div>
+    </div>
+    <div class="confirm" id="confirmBar" hidden>
+      <span id="confirmText"></span>
+      <button type="button" class="btn danger" id="confirmYes">Yes, clear</button>
+      <button type="button" class="btn ghost" id="confirmNo">Keep</button>
+    </div>
+    <div class="table-wrap">
+      <table class="labels">
+        <thead><tr>
+          <th class="c-thumb">Preview</th><th class="c-l1">Line 1</th><th class="c-l2">Line 2</th><th class="c-l2">Line 3</th><th>Icons</th><th>Code</th>
+          <th class="c-len" id="lenHead">Length</th><th class="c-qty">Qty</th><th class="c-act"><span class="sr">Actions</span></th>
+        </tr></thead>
+        <tbody id="labelRows"></tbody>
+      </table>
+    </div>
+    <p class="list-empty" id="emptyList" hidden>No labels yet. Pick a category in the parts library, or add a blank label.</p>
+  </section>
+
+  <!-- Right: output -->
+  <aside class="pane output" aria-label="Print and export">
+    <fieldset class="group" id="printGroup">
+      <legend>Print to P-touch</legend>
+      <div class="conn">
+        <span class="pill" id="connPill">Not connected</span>
+        <div class="row-btns">
+          <button type="button" class="btn" id="connUsb">USB</button>
+          <button type="button" class="btn" id="connBt">Bluetooth</button>
+          <button type="button" class="btn ghost" id="connClose" hidden>Disconnect</button>
+        </div>
+      </div>
+      <div id="printBody">
+        <div class="field-row">
+          <label class="field"><span>Output</span><select id="outMode" data-key="outMode"><option value="pages">Separate labels</option><option value="strip">One strip with cut marks</option></select></label>
+          <label class="field"><span>Cutter</span><select id="cutMode" data-key="cutMode"><option value="each">Cut each label</option><option value="end">Cut at end</option><option value="chain">Chain (save tape)</option></select></label>
+        </div>
+        <div class="field-row">
+          <label class="field"><span>Feed margin mm</span><input type="number" id="marginMm" data-key="marginMm" min="1" max="20" step="0.5"></label>
+          <label class="check"><input type="checkbox" id="flip" data-key="flip"> Flip</label>
+          <label class="check"><input type="checkbox" id="mirror" data-key="mirror"> Mirror</label>
+        </div>
+        <div class="row-btns stack">
+          <button type="button" class="btn primary" id="printSel">Print this label</button>
+          <button type="button" class="btn primary" id="printAll">Print all</button>
+          <button type="button" class="btn" id="printTest">Test label</button>
+          <button type="button" class="btn ghost" id="checkTape">Read tape</button>
+        </div>
+        <details class="help">
+          <summary>Connection help</summary>
+          <p><strong>Bluetooth:</strong> pair the printer in your system's Bluetooth settings first. On Windows it then appears as a COM port; pick it from the list.</p>
+          <p><strong>USB on Windows:</strong> the Brother driver keeps the printer to itself. To use USB from the browser, switch the printer to the WinUSB driver (for example with Zadig). Brother's own software won't see it until you switch back.</p>
+          <p><strong>Orientation:</strong> print the test label. If the text comes out upside down or mirrored, tick Flip or Mirror.</p>
+          <p>Direct printing needs Chrome or Edge on a desktop and a site served over HTTPS (or localhost).</p>
+        </details>
+      </div>
+      <p class="hint" id="printNA" hidden>Direct printing works with Brother P-touch tape. For this media, download a PDF, PNG or ZPL file below.</p>
+      <ol class="log mono" id="log" aria-live="polite"></ol>
+    </fieldset>
+
+    <fieldset class="group">
+      <legend>Download</legend>
+      <div class="field-row" id="sheetRow">
+        <label class="field"><span>Sheet paper</span><select id="sheetPage" data-key="sheetPage"><option value="a4">A4</option><option value="letter">US Letter</option></select></label>
+        <label class="field" id="fSkip"><span>Skip used slots</span><input type="number" id="skipSlots" data-key="skipSlots" min="0" max="200" step="1"></label>
+      </div>
+      <div class="exports">
+        <button type="button" class="exp" data-exp="pdf-sheet"><b>PDF sheet</b><span>Labels laid out on a printable page</span></button>
+        <button type="button" class="exp" data-exp="pdf-each"><b>PDF per label</b><span>One page per label, sized to the label</span></button>
+        <button type="button" class="exp" data-exp="png"><b>PNG</b><span>This label at printer resolution</span></button>
+        <button type="button" class="exp" data-exp="png-zip"><b>PNG set</b><span>Every label in a .zip</span></button>
+        <button type="button" class="exp" data-exp="svg"><b>SVG</b><span>This label as vector art</span></button>
+        <button type="button" class="exp" data-exp="svg-zip"><b>SVG set</b><span>Every label in a .zip</span></button>
+        <button type="button" class="exp" data-exp="zpl"><b>ZPL</b><span>Zebra-compatible thermal printers</span></button>
+        <button type="button" class="exp" data-exp="bin"><b>P-touch raster</b><span>Raw print job (.bin)</span></button>
+        <button type="button" class="exp" data-exp="csv"><b>CSV</b><span>The label list as a spreadsheet</span></button>
+      </div>
+    </fieldset>
+  </aside>
+</main>
+
+<dialog id="iconDlg" class="dlg">
+  <form method="dialog" class="dlg-in">
+    <div class="dlg-head">
+      <h3 id="iconDlgTitle">Choose an icon</h3>
+      <input type="search" id="iconSearch" placeholder="Search icons" aria-label="Search icons">
+      <button class="icon-btn" value="cancel" aria-label="Close">×</button>
+    </div>
+    <div class="icon-grid" id="iconGrid"></div>
+  </form>
+</dialog>
+
+<footer class="foot">
+  <p>Everything runs in your browser. Labels and images stay on this device unless you download them.</p>
+</footer>
+<!--APP-END-->
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
