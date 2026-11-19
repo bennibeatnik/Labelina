@@ -16,7 +16,7 @@ try {
   items.push({ lines: ['bad', '', ''], codeType: 'ean13', code: 'abc' });
   const style = { font: 'Arial', w1: 700, w2: 400, ratio: 0.66, padMm: 1.5, gapMm: 1, edgeMm: 0.2, iconScale: 1, lengthMode: 'auto', lengthMm: 40, unitPitch: 42, unitInset: 6, codePos: 'right', align: 'left', showIcon: true, showIcon2: true, sizeMode: 'auto', border: 'round' };
   let n = 0, errs = new Set();
-  for (const media of M.MEDIA) for (const hd of media.hdCapable ? ['', '1'] : ['']) for (const mode of ['auto', 'units', 'fixed']) for (const pos of ['right', 'below', 'left']) for (const lay of ['row', 'header']) {
+  for (const media of M.MEDIA) for (const hd of media.hdCapable ? ['', '1'] : ['']) for (const mode of ['auto', 'units', 'fixed']) for (const pos of ['right', 'below', 'left']) for (const lay of ['row', 'split', 'header']) {
     const st = { ...style, lengthMode: mode, codePos: pos, hd, layout: lay };
     const env = { media: R.resolveMedia(media, st), style: st, feedMm: 2 };
     for (const it of items) {
@@ -134,6 +134,29 @@ try {
       const r = inkRows(sc, 0, sc.W);
       if (r.top > 1 || r.bot < r.H - 2) throw new Error(`header text block spans ${r.top}..${r.bot} of ${r.H}`);
       out.push(`header layout: line 1 x=${texts[0].x.toFixed(0)}, line 2 x=${texts[1].x.toFixed(0)}, ink rows ${r.top}..${r.bot}`); }
+    // 5b. Split layout: first icon full height beside the text, second icon on line 1,
+    //     lines 2+ start right after the first icon (under the second icon and line 1).
+    { const I = await import('../js/icons.js');
+      const { g, sc } = mk({ ...base, layout: 'split' });
+      const texts = sc.items.filter(i => i.k === 'text'), icons = sc.items.filter(i => i.k === 'icon');
+      const ink = ic => { const b = I.iconInkBounds(ic.id); return { top: ic.y + b.y0 * ic.s, bot: ic.y + b.y1 * ic.s, right: ic.x + b.x1 * ic.s }; };
+      const first = icons.find(i => i.id === 'shcs'), second = icons.find(i => i.id === 'd-hex');
+      if (!first || !second) throw new Error('split layout lost an icon');
+      const a = ink(first), b2 = ink(second);
+      if (a.top > 1 || a.bot < sc.H - 1) throw new Error(`split layout: first icon not full height (${a.top.toFixed(0)}..${a.bot.toFixed(0)} of ${sc.H})`);
+      const l1Top = texts[0].y - g.L[0].a * texts[0].size, l1Bottom = texts[0].y + g.L[0].d * texts[0].size;
+      if (b2.top < l1Top - 1 || b2.bot > l1Bottom + 1) throw new Error('split layout: second icon not on line 1');
+      if (Math.abs(texts[1].x - g.textBox.x) > 0.5 || g.textBox.x < a.right) throw new Error('split layout: line 2 not right after the first icon');
+      if (!(texts[0].x > b2.right - 0.5)) throw new Error('split layout: line 1 overlaps the second icon');
+      out.push(`split layout: first icon rows ${a.top.toFixed(0)}..${a.bot.toFixed(0)}, second icon on line 1, line 2 x=${texts[1].x.toFixed(0)}`); }
+    // 5c. Lines that fill the length are flagged as limited (so the app can say why they don't grow),
+    //     and the split layout gives lines 2–3 more room than the row layout on a 33 mm label.
+    { const lbl33 = { ...lblT, lines: ['M3×8', 'Socket head · A2 SS', 'ISO 4762 · Key 2.5'] };
+      const row = mk({ ...base, lengthMm: 33, lineRel: [1, 1, 1, 1, 1] }, lbl33).sc.items.filter(i => i.k === 'text');
+      const split = mk({ ...base, lengthMm: 33, lineRel: [1, 1, 1, 1, 1], layout: 'split' }, lbl33).sc.items.filter(i => i.k === 'text');
+      if (!row[1].limited || !row[2].limited) throw new Error('33 mm: long lines 2–3 should be flagged as limited by length');
+      if (!(split[1].size > row[1].size * 1.1)) throw new Error('split layout does not give line 2 more room');
+      out.push(`33 mm line 2: row ${(row[1].size * 72 / 180).toFixed(1)} pt (limited) -> split ${(split[1].size * 72 / 180).toFixed(1)} pt`); }
     // 6. QR size follows the slider smoothly and never disappears on 12 mm tape.
     { const sides = [];
       for (let s = 0.3; s <= 1.0001; s += 0.05) {

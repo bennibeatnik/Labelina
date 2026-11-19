@@ -264,6 +264,9 @@ table.labels { width: 100%; border-collapse: collapse; min-width: 980px; }
 .line-specs td { padding: 2px 4px; }
 .line-specs td:first-child { width: 44px; color: var(--muted); }
 .line-specs input, .line-specs select { width: 100%; min-height: 30px; }
+.line-specs td.eff { font: 500 12px/1.2 var(--font-mono); white-space: nowrap; }
+.line-specs td.eff.lim { color: var(--warn); }
+.limit-note { margin: 4px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--warn-soft, rgba(168,103,13,0.12)); color: var(--fg); font-size: 12.5px; }
 .native-pick { display: flex; align-items: flex-end; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .native-pick .field { flex: 1 1 180px; }
 .native-pick[hidden], [data-native][hidden], [data-web][hidden] { display: none; }

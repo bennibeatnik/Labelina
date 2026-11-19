@@ -30,6 +30,7 @@ const newId = () => 'L' + (Date.now().toString(36)) + (uid++).toString(36);
 const mkLabel = (o = {}) => ({
   id: newId(), lines: [...(o.lines || []), '', '', '', '', ''].slice(0, MAX_LINES), icon: o.icon || '', icon2: o.icon2 || '',
   codeType: o.codeType || 'none', code: o.code || '', len: o.len ?? null, qty: o.qty || 1,
+  src: o.src || null,
 });
 
 const SAMPLE = [
@@ -289,6 +290,7 @@ function drawStage() {
   $('stagePos').textContent = `${i + 1} / ${labels.length}`;
   warn.innerHTML = '';
   for (const e of sc.errors) { const li = document.createElement('li'); li.textContent = e; warn.appendChild(li); }
+  updateLineEffects();
 }
 
 // ------------------------------------------------------------------ table
@@ -552,15 +554,43 @@ function libBuild() {
   let items = [];
   try { items = cat.build(v) || []; } catch (e) { console.error(e); items = []; }
   let n = parseInt(v.skuStart, 10) || 1;
-  return items.map(it => {
+  const snapshot = JSON.parse(JSON.stringify(v));
+  return items.map((it, i) => {
     const lines = [...it.lines, '', '', '', '', ''].slice(0, MAX_LINES);
     let codeType = 'none', code = '';
     if (v.codeType && v.codeType !== 'none') {
       codeType = v.codeType;
       code = v.codeFrom === 'sku' ? `${v.skuPrefix || ''}${String(n++).padStart(3, '0')}` : v.codeType === 'qr' ? lines.filter(Boolean).join(' ') : lines[0];
     }
-    return { lines, icon: it.icon || '', icon2: it.icon2 || '', codeType, code };
+    // `src` remembers which library settings made this label, so "Update labels in the list"
+    // can re-apply new display choices (details, standard, size format) to it later.
+    return { lines, icon: it.icon || '', icon2: it.icon2 || '', codeType, code, src: { cat: cat.id, v: snapshot, i } };
   });
+}
+// Library fields that only change what's written, not which parts are listed.
+const DISPLAY_FIELDS = ['show', 'std', 'fmt', 'driveIcon', 'three'];
+function libLabelsInList() { const id = libCategory().id; return labels.filter(l => l.src && l.src.cat === id); }
+function libUpdateExisting() {
+  const cat = libCategory(), cur = libVals();
+  const groups = new Map();
+  for (const l of libLabelsInList()) { const k = JSON.stringify(l.src.v); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(l); }
+  let n = 0;
+  for (const [k, ls] of groups) {
+    const v = JSON.parse(k);
+    for (const f of DISPLAY_FIELDS) if (f in cur) v[f] = Array.isArray(cur[f]) ? [...cur[f]] : cur[f];
+    let items = [];
+    try { items = cat.build(v) || []; } catch (e) { console.error(e); }
+    for (const l of ls) {
+      const it = items[l.src.i];
+      if (!it) continue;
+      l.lines = [...[...it.lines, '', '', ''].slice(0, 3), l.lines[3] || '', l.lines[4] || '']; // lines 4–5 are yours
+      l.icon = it.icon || ''; l.icon2 = it.icon2 || '';
+      l.src = { ...l.src, v };
+      n++;
+    }
+  }
+  buildTable(); rerender(true);
+  $('libUpdateMsg').textContent = `Updated ${n} label${n === 1 ? '' : 's'}.`;
 }
 function updateLibPreview() {
   const items = libBuild();
@@ -576,6 +606,10 @@ function updateLibPreview() {
   if (items.length > 40) { const li = document.createElement('li'); li.innerHTML = `<span>and ${items.length - 40} more</span>`; ul.appendChild(li); }
   $('libAdd').disabled = $('libReplace').disabled = !items.length;
   $('libAdd').textContent = items.length ? `Add ${items.length} to list` : 'Add to list';
+  const inList = libLabelsInList().length;
+  $('libUpdate').hidden = !inList;
+  $('libUpdate').textContent = `Update ${inList} ${libCategory().name.toLowerCase()} label${inList === 1 ? '' : 's'} in the list`;
+  $('libUpdateMsg').textContent = '';
   save();
 }
 function addLabels(items, replace) {
@@ -584,6 +618,7 @@ function addLabels(items, replace) {
   if (fresh.length) selId = fresh[0].id;
   buildTable();
   rerender(true);
+  updateLibPreview(); // refresh the "Update N labels in the list" count
   const row = document.querySelector(`tr[data-id="${selId}"]`);
   row && row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
@@ -699,8 +734,31 @@ function renderLineSpecs() {
     sel.value = S.lineW[i];
     sel.addEventListener('change', () => { S.lineW = S.lineW.map((x, j) => (j === i ? sel.value : x)); ensureFont(); rerender(true); });
     c2.appendChild(sel);
-    tr.append(c0, c1, c2);
+    const c3 = document.createElement('td'); c3.className = 'eff'; c3.dataset.i = i; c3.textContent = '–';
+    tr.append(c0, c1, c2, c3);
     tb.appendChild(tr);
+  }
+  updateLineEffects();
+}
+// "Prints at" column: the size each line of the selected label really gets, and why it's smaller
+// than its setting when the label's length is the limit.
+function updateLineEffects() {
+  const r = renders[selIndex()];
+  const cells = [...document.querySelectorAll('#lineSpecs td.eff')];
+  const note = $('limitNote');
+  if (!r) { cells.forEach(c => { c.textContent = '–'; c.classList.remove('lim'); }); note.hidden = true; return; }
+  const texts = r.sc.items.filter(it => it.k === 'text');
+  const limited = [];
+  cells.forEach(c => {
+    const t = texts.find(it => it.idx === +c.dataset.i);
+    c.classList.toggle('lim', !!(t && t.limited));
+    c.textContent = t ? `${(t.size * 72 / r.sc.dpi).toFixed(1)} pt${t.limited ? ' · max' : ''}` : '–';
+    if (t && t.limited) limited.push(+c.dataset.i + 1);
+  });
+  note.hidden = !limited.length;
+  if (limited.length) {
+    const which = limited.length === 1 ? `Line ${limited[0]} is` : `Lines ${limited.slice(0, -1).join(', ')} and ${limited[limited.length - 1]} are`;
+    note.textContent = `${which} as large as this label's length allows, so a bigger size setting can't make ${limited.length === 1 ? 'it' : 'them'} grow. To get bigger text: put less on the line (Parts library → Details on the label, then "Update labels in the list"), make the label longer, put the second icon on line 1 (Arrangement), or make the icons smaller.`;
   }
 }
 // Applies a length preset. Tight presets (SLICC) also pick the smallest margins.
@@ -1039,6 +1097,7 @@ function wire() {
 
   $('libAdd').addEventListener('click', () => addLabels(libBuild(), false));
   $('libReplace').addEventListener('click', () => addLabels(libBuild(), true));
+  $('libUpdate').addEventListener('click', libUpdateExisting);
 
   $('importAdd').addEventListener('click', () => importRows(false));
   $('importReplace').addEventListener('click', () => importRows(true));

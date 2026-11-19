@@ -21,9 +21,20 @@ const sizesField = (def = ['M3'], filter) => ({
     ? F.INCH_SIZES.map(s => opt(s.id, F.prettyInchSize(s.id)))
     : F.METRIC_SIZES.filter(s => !filter || filter(s)).map(s => opt(s.id)),
 });
+// The options show the actual pitch for the chosen sizes, e.g. "Coarse · M5 0.8", so it's clear
+// what will be printed.
 const pitchField = {
   id: 'pitch', label: 'Thread pitch', type: 'select', def: 'coarse',
-  options: v => v.system === 'inch' ? [opt('coarse', 'UNC (coarse)'), opt('fine', 'UNF (fine)')] : [opt('coarse', 'Coarse'), opt('fine', 'Fine')],
+  options: v => {
+    if (v.system === 'inch') return [opt('coarse', 'UNC (coarse)'), opt('fine', 'UNF (fine)')];
+    const sz = (v.sizes || []).map(id => metricById[id]).filter(Boolean).slice(0, 4);
+    const list = pick => sz.map(s => `${s.id} ${F.num(pick(s))}`).join(', ');
+    const more = (v.sizes || []).length > 4 ? ', …' : '';
+    return [
+      opt('coarse', sz.length ? `Coarse · ${list(s => s.p)}${more}` : 'Coarse (standard)'),
+      opt('fine', sz.length ? `Fine · ${list(s => (s.fine && s.fine[0]) || s.p)}${more}` : 'Fine'),
+    ];
+  },
 };
 const materialField = (def = 'a2', ids) => ({
   id: 'material', label: 'Material', type: 'select', def,

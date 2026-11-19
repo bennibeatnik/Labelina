@@ -122,7 +122,12 @@ export function layout(lbl, env, fontPx) {
   const media = env.media;
   const dpi = media.dpi, k = dpi / 25.4;
   const ySub = media.ySub || 1; // layout rows per printed dot across the tape
-  const mode = style.layout === 'header' ? 'header' : 'row';
+  // Where each icon goes: 'side' = full height beside the text, 'line1' = on line 1's row.
+  //   row    = both icons full height beside the text
+  //   split  = first icon full height, second icon on line 1 (other lines under line 1)
+  //   header = both icons on line 1
+  const mode = ['split', 'header'].includes(style.layout) ? style.layout : 'row';
+  const placement = mode === 'row' ? ['side', 'side'] : mode === 'split' ? ['side', 'line1'] : ['line1', 'line1'];
   const errors = [];
   let H, W = null;
   if (media.kind === 'tape') H = media.pins * ySub;
@@ -158,14 +163,16 @@ export function layout(lbl, env, fontPx) {
 
   // ---- icons
   const iconList = [];
-  const addIcon = (id, scale) => {
+  const addIcon = (id, scale, slot) => {
     if (!id || !(ICON_MAP[id] || id.startsWith('img-'))) return;
     const b = iconInkBounds(id, env.customImages);
     const fw = Math.max(0.02, b.x1 - b.x0), fh = Math.max(0.02, b.y1 - b.y0);
-    iconList.push({ id, scale, b, fw, fh, aspect: Math.min(fw / fh, 1.6) }); // ink width per ink height
+    iconList.push({ id, scale, b, fw, fh, aspect: Math.min(fw / fh, 1.6), where: placement[slot] }); // aspect: ink width per ink height
   };
-  if (style.showIcon !== false) addIcon(lbl.icon, num(style.iconScale, 1));
-  if (style.showIcon2 !== false) addIcon(lbl.icon2, num(style.iconScale2, 0.65));
+  if (style.showIcon !== false) addIcon(lbl.icon, num(style.iconScale, 1), 0);
+  if (style.showIcon2 !== false) addIcon(lbl.icon2, num(style.iconScale2, 0.65), 1);
+  const sideIcons = iconList.filter(ic => ic.where === 'side');
+  const headIcons = iconList.filter(ic => ic.where === 'line1');
   // Icon box for an ink height T: drawing scaled so its ink is T tall (or 1.6 T wide at most).
   const iconBox = (ic, T) => {
     const side = Math.max(1, Math.min(T / ic.fh, 1.6 * T / ic.fw));
@@ -214,11 +221,8 @@ export function layout(lbl, env, fontPx) {
       }
     }
     const textH = belowH ? ih - belowH - gap : ih;
-    let icons = [], iconsW = 0;
-    if (mode === 'row') {
-      icons = iconList.map(ic => ({ ic, ...iconBox(ic, Math.max(4, textH * ic.scale * f)) }));
-      iconsW = icons.reduce((s, b) => s + b.w, 0) + Math.max(0, icons.length - 1) * iconGap;
-    }
+    const icons = sideIcons.map(ic => ({ ic, ...iconBox(ic, Math.max(4, textH * ic.scale * f)) }));
+    const iconsW = icons.reduce((s, b) => s + b.w, 0) + Math.max(0, icons.length - 1) * iconGap;
     return { codeBox, codeW, belowH, textH, icons, iconsW, errs };
   };
 
@@ -226,13 +230,13 @@ export function layout(lbl, env, fontPx) {
   const n = L.length;
   // Width used by everything except the text (row layout: icons too), including the gaps.
   const sideW = B => (B.icons.length ? B.iconsW + gap : 0) + (B.codeW ? B.codeW + gap : 0);
-  // Header layout: line 1's row also holds the icons. K = icon ink width per unit of line-1 ink height.
-  const headK = mode === 'header' ? iconList.reduce((s, ic) => s + ic.scale * ic.aspect, 0) : 0;
-  const headG = mode === 'header' && iconList.length ? gap + iconGap * (iconList.length - 1) : 0;
+  // Icons on line 1 share its row. K = their ink width per unit of line-1 ink height.
+  const headK = headIcons.reduce((s, ic) => s + ic.scale * ic.aspect, 0);
+  const headG = headIcons.length ? gap + iconGap * (headIcons.length - 1) : 0;
   const setCaps = textW => {
     L.forEach((ln, j) => {
       ln.cap = ln.w > 0 ? Math.max(0, textW) / ln.w : Infinity;
-      if (j === 0 && mode === 'header' && iconList.length) ln.cap = Math.max(0, textW - headG) / (ln.w + (ln.a + ln.d) * headK);
+      if (j === 0 && headIcons.length) ln.cap = Math.max(0, textW - headG) / (ln.w + (ln.a + ln.d) * headK);
     });
   };
 
@@ -301,7 +305,7 @@ export function layout(lbl, env, fontPx) {
     else if (codePos !== 'left') codeBox.x = codeBox.kind === 'qr' ? W - pad - codeBox.side : W - pad - codeBox.quiet - codeBox.w;
   }
   return {
-    W, H, dpi, k, ySub, mode, L, lines: L.map(ln => ln.s), iconBoxes, headIcons: mode === 'header' ? iconList : [],
+    W, H, dpi, k, ySub, mode, L, lines: L.map(ln => ln.s), iconBoxes, headIcons,
     iconGap, gap, lineGap, textBox, codeBox, code, autoF, errors, fam: style.font, fontPx,
   };
 }
@@ -326,9 +330,9 @@ export function scene(geo, f, style) {
     const block = inkH.reduce((a, b) => a + b, 0) + geo.lineGap * (L.length - 1);
     let y = tb.y + Math.max(0, (tb.h - block) / 2);
     const center = style.align === 'center';
-    // Header layout: icons sit on line 1's row, sized to that row's ink height.
+    // Icons placed on line 1 sit on its row, sized to that row's ink height.
     let row0X = tb.x;
-    if (geo.mode === 'header' && geo.headIcons.length) {
+    if (geo.headIcons.length) {
       const T0 = inkH[0];
       geo.headIcons.forEach((ic, j) => {
         const T = T0 * ic.scale;
@@ -343,7 +347,9 @@ export function scene(geo, f, style) {
       const base = y + ln.a * s;
       const x0 = j === 0 ? row0X : tb.x;
       const avail = tb.x + tb.w - x0;
-      items.push({ k: 'text', s: ln.s, x: center ? x0 + avail / 2 : x0, y: base, size: s, weight: ln.weight, fam: geo.fam, align: center ? 'center' : 'left' });
+      // `limited`: the line is smaller than its setting because its text fills the available length.
+      const limited = s + 0.01 < f * ln.rel;
+      items.push({ k: 'text', s: ln.s, x: center ? x0 + avail / 2 : x0, y: base, size: s, weight: ln.weight, fam: geo.fam, align: center ? 'center' : 'left', idx: ln.idx, limited });
       y = base + ln.d * s + geo.lineGap;
     });
   }
