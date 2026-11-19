@@ -31,6 +31,11 @@ Last updated: 2026-11-19
 - Probable cause: Labelina sent `ESC i A 01`, which Brother's reference marks as not supported on the PT-P710BT. Removed (cut-each is the default). Also fixed n9 in ESC i z (0 first page, 1 others; it used to send 2 for the last page), and made serial writes chunked and safe against partial resends.
 - **Not yet confirmed on the printer.** Over Bluetooth the app now waits for the "printing completed" status and logs the result, so a stall shows in the log. If it still stalls, suspects are HD (bit 6) on the D610BT and the USB spooler route; ask which connection was used.
 
+## USB route (2026-11-19, later)
+- The user prints over **USB**. Through the Windows spooler (RAW), a job hung as "Printing, Retained" with 0 bytes; after cancelling and replugging, an *old* label printed. The spooler route is unreliable with Brother's D610BT driver.
+- Fix: open the USB printer-class interface directly (`\\?\USB#VID_04F9&PID_20E1#<serial>#{28d78fad-5a12-11d1-ae5b-0000f803a8c2}`) with shared read/write. No driver swap needed. Verified two-way with a status request: 12 mm tape, media type 0x14 (Flexible ID), no errors. Printing on this route is **not yet confirmed by the user**.
+- The user's tape is 12 mm TZe Flexible ID (type 0x14); tape auto-detect now accepts all TZe types.
+
 ## Layout engine (2026-11-19)
 - The user's feedback: big gaps between icons, white space before the first icon, a huge QR with no gap, and they want more information on tall tapes and a QR size per tape.
 - Icons are measured for their ink width (`iconInkBounds` in icons.js) and placed by that width. Separate `gapMm` (between groups) and `iconGapMm` (between the icons).
